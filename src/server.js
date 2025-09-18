@@ -129,6 +129,25 @@ class AlphaTrackerServer {
 			}
 		};
 
+		// Periodically process Telegram admin commands to add accounts
+		setInterval(async () => {
+			try {
+				await this.notifier.processAdminCommands(async (username) => {
+					console.log(`🛠️  Admin requested add account: @${username}`);
+					const pool = getPool();
+					await pool.execute('INSERT IGNORE INTO tracked_accounts (username, is_test) VALUES (?, 0)', [username]);
+					// Update in-memory tracker and re-sync
+					if (!this.tracker.dynamicAccounts.has(username)) {
+						this.tracker.dynamicAccounts.add(username);
+						// kick off an immediate sync for this account
+						await this.tracker.syncLatestTweets(24);
+					}
+				});
+			} catch (e) {
+				console.error('❌ Admin command loop error:', e.message);
+			}
+		}, 5000);
+
 		global.aiMaybeUpdate = async () => {
 			try {
 				// Build context from last 24h

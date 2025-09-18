@@ -15,6 +15,7 @@ class TrackerService {
 		// Default accounts configuration
 		this.DEFAULT_ACCOUNTS = ['cz_binance', 'CookerFlips', 'ShockedJS', 'LabsNoor'];
         this.TEST_ACCOUNTS = ['alien88ted'];
+		this.dynamicAccounts = new Set(); // from DB tracked_accounts
     }
 
     /**
@@ -35,11 +36,18 @@ class TrackerService {
             // Load API usage from database
             await this.twitterService.loadApiUsage();
 
-            // Get accounts from environment or use defaults
-            const accountsEnv = process.env.TWITTER_ACCOUNTS || this.DEFAULT_ACCOUNTS.join(',');
-            const accounts = accountsEnv.split(',').map(a => a.trim()).filter(a => a);
+			// Get accounts from environment or use defaults + dynamic from DB
+			const accountsEnv = process.env.TWITTER_ACCOUNTS || this.DEFAULT_ACCOUNTS.join(',');
+			let accounts = accountsEnv.split(',').map(a => a.trim()).filter(a => a);
+			// merge dynamic
+			try {
+				const pool = getPool();
+				const [rows] = await pool.execute('SELECT username FROM tracked_accounts');
+				rows.forEach(r => this.dynamicAccounts.add(r.username));
+				accounts = Array.from(new Set([...accounts, ...Array.from(this.dynamicAccounts)]));
+			} catch {}
 
-            console.log(`📊 Alpha accounts: ${accounts.join(', ')}`);
+			console.log(`📊 Alpha accounts: ${accounts.join(', ')}`);
             console.log(`🧪 Test accounts: ${this.TEST_ACCOUNTS.join(', ')} [FEED ONLY]`);
         console.log('🔴 LIVE STREAM MODE - Zero polling delay!');
 

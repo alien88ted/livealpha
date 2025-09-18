@@ -12,13 +12,30 @@ async function initializeDB() {
             throw new Error('DATABASE_URL environment variable is required');
         }
 
-        const dbUrl = process.env.DATABASE_URL.replace(/['"]/g, '');
+        const dbUrl = process.env.DATABASE_URL; // keep as-is to preserve ssl JSON for PlanetScale
         console.log('🔗 Connecting to database...');
 
         // Parse the database URL
         const url = new URL(dbUrl);
 
         // Create connection pool with optimized settings
+        // Extract optional ssl param from query string for PlanetScale, e.g. ssl={"rejectUnauthorized":true}
+        let ssl = false;
+        const sslParam = url.searchParams.get('ssl');
+        if (sslParam) {
+            try {
+                ssl = JSON.parse(sslParam);
+            } catch {
+                // fallback: if value is like {rejectUnauthorized:true}
+                try { ssl = eval('(' + sslParam + ')'); } catch {}
+            }
+        }
+
+        // Default SSL behavior: in production, enforce TLS; otherwise permissive
+        if (!ssl) {
+            ssl = process.env.NODE_ENV === 'production' ? { rejectUnauthorized: true } : { rejectUnauthorized: false };
+        }
+
         pool = mysql.createPool({
             host: url.hostname,
             port: url.port || 3306,
@@ -28,10 +45,8 @@ async function initializeDB() {
             waitForConnections: true,
             connectionLimit: 10,
             queueLimit: 0,
-            acquireTimeout: 60000,
-            ssl: {
-                rejectUnauthorized: false // For compatibility with various SSL setups
-            }
+            connectTimeout: 60000,
+            ssl
         });
 
         // Test the connection
@@ -127,6 +142,16 @@ async function createTables() {
 				summary_checksum VARCHAR(64) NULL,
 				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 				INDEX idx_created_at (created_at)
+			)
+		`);
+
+		// Create tracked accounts table (dynamic monitored accounts)
+		await pool.execute(`
+			CREATE TABLE IF NOT EXISTS tracked_accounts (
+				id INT AUTO_INCREMENT PRIMARY KEY,
+				username VARCHAR(50) UNIQUE,
+				is_test TINYINT(1) DEFAULT 0,
+				added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 			)
 		`);
 
