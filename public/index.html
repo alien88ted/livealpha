@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🔴 LIVE Alpha Twitter Tracker</title>
+    <style>
+        body { font-family: monospace; margin: 20px; background: #000; color: #0f0; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .stats { display: flex; gap: 20px; margin-bottom: 20px; flex-wrap: wrap; }
+        .stat-box { border: 1px solid #0f0; padding: 10px; min-width: 120px; }
+        .tweets { border: 1px solid #0f0; padding: 10px; }
+        .tweet { border-bottom: 1px solid #333; padding: 10px 0; margin: 5px 0; }
+        .tweet:last-child { border-bottom: none; }
+        .tweet-header { color: #ff0; font-weight: bold; }
+        .tweet-meta { color: #aaa; font-size: 0.9em; }
+        .tweet-text { margin: 5px 0; }
+        .metrics { color: #0aa; font-size: 0.8em; }
+        .new-tweet { background: #001100; }
+        .test-tweet { background: #110011; border-left: 3px solid #f0f; }
+        .live-dot { width: 8px; height: 8px; background: #0f0; border-radius: 50%; display: inline-block; animation: blink 1s infinite; }
+        @keyframes blink { 0%, 50% { opacity: 1; } 51%, 100% { opacity: 0.3; } }
+        .filters { border: 1px solid #0f0; padding: 10px; margin-bottom: 20px; }
+        .filter-group { display: flex; gap: 20px; align-items: center; flex-wrap: wrap; }
+        .filter-item { display: flex; align-items: center; gap: 5px; }
+        .filter-item input[type="checkbox"] { margin: 0; }
+        .filter-item label { color: #0f0; cursor: pointer; }
+        .rate-limit-info { border: 1px solid #0f0; padding: 15px; margin: 20px 0; }
+        .rate-limit-info h3 { margin: 0 0 10px 0; color: #0f0; }
+        .error { color: #f00; }
+        .loading { color: #fa0; }
+        .success { color: #0f0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔴 LIVE ALPHA TRACKER</h1>
+
+        <div class="rate-limit-info" style="margin-top:10px;">
+            <h3>🤖 AI Insights</h3>
+            <div id="aiCompact">
+                <span id="aiTickers"></span>
+                <span id="aiHeadline"></span>
+                <button id="aiToggle" style="margin-left:10px;">Show full</button>
+            </div>
+            <div id="aiInsights" style="display:none; margin-top:8px;"></div>
+        </div>
+        <div class="stats">
+            <div class="stat-box">
+                <div>TOTAL: <span id="totalTweets">0</span></div>
+            </div>
+            <div class="stat-box">
+                <div>ALPHA: <span id="alphaTweets">0</span></div>
+            </div>
+            <div class="stat-box">
+                <div>TEST: <span id="testTweets">0</span></div>
+            </div>
+            <div class="stat-box">
+                <div>LIVE: <span class="live-dot"></span> <span id="connectionStatus">CONNECTING</span></div>
+            </div>
+            <div class="stat-box">
+                <div>FRESH: <span id="refreshStatus">LOADING</span></div>
+            </div>
+            <div class="stat-box">
+                <div>ACCOUNTS: <span id="activeAccounts">0</span></div>
+            </div>
+            <div class="stat-box">
+                <div>API: <span id="apiUsage">0%</span></div>
+            </div>
+            <div class="stat-box">
+                <div>QUEUE: <span id="queueLength">0</span></div>
+            </div>
+            <div class="stat-box">
+                <div>AI: <span id="aiPhase">idle</span></div>
+            </div>
+            <div class="stat-box">
+                <div><a id="memoryLink" href="#" style="color:#0f0; text-decoration:underline;">AI Memory</a></div>
+            </div>
+        </div>
+
+        <div class="rate-limit-info" id="rateLimitInfo" style="display: none;">
+            <h3>📊 Rate Limit Status</h3>
+            <div id="rateLimitDetails"></div>
+        </div>
+
+        <div class="filters">
+            <div class="filter-group">
+                <span>ACCOUNTS:</span>
+                <div class="filter-item">
+                    <input type="checkbox" id="filter-cz_binance" checked>
+                    <label for="filter-cz_binance">@cz_binance</label>
+                </div>
+                <div class="filter-item">
+                    <input type="checkbox" id="filter-CookerFlips" checked>
+                    <label for="filter-CookerFlips">@CookerFlips</label>
+                </div>
+                <div class="filter-item">
+                    <input type="checkbox" id="filter-ShockedJS" checked>
+                    <label for="filter-ShockedJS">@ShockedJS</label>
+                </div>
+                <div class="filter-item">
+                    <input type="checkbox" id="filter-LabsNoor" checked>
+                    <label for="filter-LabsNoor">@LabsNoor</label>
+                </div>
+                <div class="filter-item">
+                    <input type="checkbox" id="filter-alien88ted" checked>
+                    <label for="filter-alien88ted">@alien88ted (TEST)</label>
+                </div>
+            </div>
+        </div>
+
+        <div class="tweets">
+            <div id="tweetsContent">Loading...</div>
+        </div>
+
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+        let allTweets = [];
+        let accounts = new Set();
+        let enabledAccounts = new Set(['cz_binance', 'CookerFlips', 'ShockedJS', 'LabsNoor', 'alien88ted']);
+
+        function formatTime(dateString) {
+            const date = new Date(dateString);
+            const now = new Date();
+            const diff = Math.floor((now - date) / 1000);
+
+            if (diff < 60) return `${diff}s`;
+            if (diff < 3600) return `${Math.floor(diff / 60)}m`;
+            if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
+            return `${Math.floor(diff / 86400)}d`;
+        }
+
+        function formatNum(num) {
+            if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
+            if (num >= 1000) return (num / 1000).toFixed(1) + 'K';
+            return num.toString();
+        }
+
+        function compactFallbackFromContent(content) {
+            if (!content) return { tickers: [], headline: '' };
+            const tickerSet = new Set((content.match(/\$[A-Z]{2,10}/g) || []).slice(0, 6));
+            const lines = content.split('\n').map(l => l.trim()).filter(Boolean);
+            let headline = '';
+            const hotIdx = lines.findIndex(l => l.toLowerCase().startsWith('**hot now') || l.toLowerCase().startsWith('hot now'));
+            if (hotIdx !== -1) {
+                headline = lines[hotIdx + 1] || lines[hotIdx];
+            }
+            if (!headline) {
+                const aiPick = lines.find(l => /ai pick/i.test(l));
+                headline = aiPick || lines[0] || '';
+            }
+            headline = headline.replace(/\*\*/g, '').replace(/^[-•\s]+/, '').slice(0, 160);
+            return { tickers: Array.from(tickerSet), headline };
+        }
+
+        function renderTweet(tweet, isNew = false) {
+            const isTest = tweet.isTest || false;
+            const username = tweet.username || 'unknown';
+            accounts.add(username);
+
+            return `
+                <div class="tweet ${isNew ? 'new-tweet' : ''} ${isTest ? 'test-tweet' : ''}" data-id="${tweet.id}">
+                    <div class="tweet-header">
+                        ${isTest ? '🧪 TEST' : '🚨 ALPHA'} @${username}
+                        <span class="tweet-meta">${formatTime(tweet.created_at)} ago | ID: ${tweet.id}</span>
+                        <span class="tweet-actions" style="float:right;">
+                            <button onclick="openTweet('${username}','${tweet.id}')">Open</button>
+                            ${tweet.conversation_id && tweet.conversation_id !== tweet.id ? `<button onclick="openThread('${username}','${tweet.conversation_id}')">Open thread</button>` : ''}
+                        </span>
+                    </div>
+                    <div class="tweet-text">${tweet.text}</div>
+                    <div class="metrics">
+                        ❤️${formatNum(tweet.like_count || 0)}
+                        🔄${formatNum(tweet.retweet_count || 0)}
+                        💬${formatNum(tweet.reply_count || 0)}
+                        👁️${formatNum(tweet.impression_count || 0)}
+                    </div>
+                </div>
+            `;
+        }
+
+        function openTweet(username, id) {
+            window.open(`https://twitter.com/${username}/status/${id}`, '_blank');
+        }
+
+        function openThread(username, id) {
+            window.open(`https://twitter.com/${username}/status/${id}`, '_blank');
+        }
+
+        function updateStats() {
+            const totalTweets = allTweets.length;
+            const alphaTweets = allTweets.filter(t => !t.isTest).length;
+            const testTweets = allTweets.filter(t => t.isTest).length;
+
+            document.getElementById('totalTweets').textContent = totalTweets;
+            document.getElementById('alphaTweets').textContent = alphaTweets;
+            document.getElementById('testTweets').textContent = testTweets;
+            document.getElementById('activeAccounts').textContent = accounts.size;
+        }
+
+        function renderAllTweets() {
+            const container = document.getElementById('tweetsContent');
+            if (allTweets.length === 0) {
+                container.innerHTML = 'No tweets tracked yet...';
+                return;
+            }
+
+            const filteredTweets = allTweets.filter(tweet => enabledAccounts.has(tweet.username));
+
+            if (filteredTweets.length === 0) {
+                container.innerHTML = 'No tweets from selected accounts...';
+                return;
+            }
+
+            const sortedTweets = [...filteredTweets].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+            container.innerHTML = sortedTweets.map(tweet => renderTweet(tweet)).join('');
+            updateStats();
+        }
+
+        function setupFilters() {
+            const checkboxes = document.querySelectorAll('input[type="checkbox"]');
+            checkboxes.forEach(checkbox => {
+                checkbox.addEventListener('change', (e) => {
+                    const username = e.target.id.replace('filter-', '');
+
+                    if (e.target.checked) {
+                        enabledAccounts.add(username);
+                    } else {
+                        enabledAccounts.delete(username);
+                    }
+
+                    renderAllTweets();
+                    console.log('Enabled accounts:', Array.from(enabledAccounts));
+                });
+            });
+        }
+
+        async function loadInitial() {
+            try {
+                document.getElementById('refreshStatus').textContent = 'LOADING';
+                console.log('🔄 Loading fresh tweets from Twitter API...');
+                const response = await fetch('/api/tweets/live');
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const tweets = await response.json();
+
+                allTweets = tweets.map(tweet => ({
+                    ...tweet,
+                    username: tweet.username || 'unknown',
+                    isTest: tweet.isTest || false
+                }));
+
+                renderAllTweets();
+                document.getElementById('refreshStatus').textContent = 'READY';
+                console.log(`✅ Loaded ${allTweets.length} fresh tweets`);
+            } catch (error) {
+                console.error('Error loading fresh tweets:', error);
+                document.getElementById('tweetsContent').innerHTML = `<div class="error">Error loading fresh tweets: ${error.message}</div>`;
+                document.getElementById('refreshStatus').textContent = 'ERROR';
+            }
+        }
+
+        async function refreshLiveData() {
+            try {
+                document.getElementById('refreshStatus').textContent = 'REFRESHING';
+                console.log('🔄 Refreshing live tweets...');
+                const response = await fetch('/api/tweets/live');
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const freshTweets = await response.json();
+
+                allTweets = freshTweets.map(tweet => ({
+                    ...tweet,
+                    username: tweet.username || 'unknown',
+                    isTest: tweet.isTest || false
+                }));
+
+                renderAllTweets();
+                document.getElementById('refreshStatus').textContent = 'READY';
+                console.log(`✅ Refreshed with ${allTweets.length} tweets`);
+            } catch (error) {
+                console.error('Error refreshing:', error);
+                document.getElementById('refreshStatus').textContent = 'ERROR';
+            }
+        }
+
+        async function loadAIInsights() {
+            try {
+                const res = await fetch('/api/ai/insights');
+                if (!res.ok) throw new Error('AI insights not available');
+                const data = await res.json();
+                if (data.content) {
+                    document.getElementById('aiInsights').textContent = data.content;
+                    const compact = data.compact || compactFallbackFromContent(data.content);
+                    const tickers = (compact.tickers || []).join(' · ');
+                    const headline = compact.headline || '';
+                    document.getElementById('aiTickers').textContent = tickers ? `[ ${tickers} ] ` : '';
+                    document.getElementById('aiHeadline').textContent = headline;
+                } else {
+                    document.getElementById('aiInsights').textContent = 'No insights yet';
+                }
+            } catch (e) {
+                document.getElementById('aiInsights').textContent = 'No insights yet';
+            }
+        }
+
+        document.getElementById('aiToggle').addEventListener('click', () => {
+            const full = document.getElementById('aiInsights');
+            const btn = document.getElementById('aiToggle');
+            const isHidden = full.style.display === 'none';
+            full.style.display = isHidden ? 'block' : 'none';
+            btn.textContent = isHidden ? 'Hide full' : 'Show full';
+        });
+
+        document.getElementById('memoryLink').addEventListener('click', async (e) => {
+            e.preventDefault();
+            try {
+                const res = await fetch('/api/ai/memory');
+                if (!res.ok) throw new Error('Failed to load memory');
+                const data = await res.json();
+                const aiBox = document.getElementById('aiInsights');
+                aiBox.style.display = 'block';
+                aiBox.innerHTML = '';
+                const section = document.createElement('div');
+                section.innerHTML = `
+                    <div style="margin-bottom:8px; color:#0aa;">Status: ${data.status?.phase}${data.status?.running ? '…' : ''}</div>
+                    <div style="margin-bottom:8px;">Latest checksum: ${data.latestInsight?.checksum || '-'}</div>
+                    <div style="margin-bottom:8px;">Last 20 Alerts:</div>
+                    <ul style="margin:0 0 10px 18px; padding:0;">
+                        ${data.notifyHistory.map(h => `<li>[${new Date(h.created_at).toLocaleString()}] ${h.urgency || ''} ${h.message}</li>`).join('')}
+                    </ul>
+                    <div style="margin-bottom:8px;">Tweets sample (24h):</div>
+                `;
+                aiBox.appendChild(section);
+                const pre = document.createElement('pre');
+                pre.style.whiteSpace = 'pre-wrap';
+                pre.style.background = 'rgba(0,255,0,0.02)';
+                pre.style.border = '1px solid #0f0';
+                pre.style.padding = '10px';
+                pre.textContent = data.tweets.map(t => `@${t.username} | ${new Date(t.created_at).toISOString()}\n${t.text}\n`).join('\n');
+                aiBox.appendChild(pre);
+                document.getElementById('aiToggle').textContent = 'Hide full';
+            } catch (err) {
+                alert('Could not load AI memory');
+            }
+        });
+
+        // Socket events
+        socket.on('connect', () => {
+            console.log('Connected to server');
+            document.getElementById('connectionStatus').textContent = 'CONNECTED';
+        });
+
+        socket.on('disconnect', () => {
+            console.log('Disconnected');
+            document.getElementById('connectionStatus').textContent = 'DISCONNECTED';
+        });
+
+        socket.on('newTweets', (newTweets) => {
+            console.log('New tweets:', newTweets);
+
+            newTweets.forEach(tweet => {
+                const processedTweet = {
+                    ...tweet,
+                    username: tweet.username || 'unknown',
+                    isTest: tweet.isTest || false
+                };
+
+                const existingIndex = allTweets.findIndex(t => t.id === tweet.id);
+                if (existingIndex === -1) {
+                    allTweets.unshift(processedTweet);
+
+                    const container = document.getElementById('tweetsContent');
+                    const newTweetHtml = renderTweet(processedTweet, true);
+                    container.insertAdjacentHTML('afterbegin', newTweetHtml);
+
+                    setTimeout(() => {
+                        const newTweetEl = container.querySelector('.new-tweet');
+                        if (newTweetEl) newTweetEl.classList.remove('new-tweet');
+                    }, 3000);
+                } else {
+                    allTweets[existingIndex] = processedTweet;
+                }
+            });
+
+            updateStats();
+        });
+
+        socket.on('aiInsights', (payload) => {
+            const content = payload?.content || '';
+            document.getElementById('aiInsights').textContent = content || 'No insights yet';
+            const compact = payload?.compact || compactFallbackFromContent(content);
+            const tickers = (compact?.tickers || []).join(' · ');
+            const headline = compact?.headline || '';
+            document.getElementById('aiTickers').textContent = tickers ? `[ ${tickers} ] ` : '';
+            document.getElementById('aiHeadline').textContent = headline;
+        });
+
+        // Fetch and update rate limit information
+        async function updateRateLimitInfo() {
+            try {
+                const response = await fetch('/api/rate-limits');
+                if (!response.ok) return;
+                const aiRes = await fetch('/api/ai/status');
+                
+                const data = await response.json();
+                const aiData = aiRes.ok ? await aiRes.json() : null;
+                
+                // Update API usage in main stats
+                let maxUsage = 0;
+                let totalQueue = data.queueStatus.length;
+                
+                Object.values(data.endpoints || {}).forEach(endpoint => {
+                    maxUsage = Math.max(maxUsage, endpoint.usagePercentage);
+                });
+                
+                document.getElementById('apiUsage').textContent = `${maxUsage}%`;
+                document.getElementById('queueLength').textContent = totalQueue;
+                if (aiData) {
+                    const phaseText = `${aiData.phase}${aiData.running ? '…' : ''}`;
+                    const extra = aiData.idleReason ? ` (${aiData.idleReason})` : '';
+                    document.getElementById('aiPhase').textContent = phaseText + extra;
+                }
+                
+                // Update detailed rate limit info
+                const rateLimitDetails = document.getElementById('rateLimitDetails');
+                if (Object.keys(data.endpoints || {}).length > 0) {
+                    document.getElementById('rateLimitInfo').style.display = 'block';
+                    
+                    let detailsHtml = `<div style="color: #0aa; margin-bottom: 10px;">Plan: ${data.plan.toUpperCase()}</div>`;
+                    
+                    Object.entries(data.endpoints).forEach(([key, endpoint]) => {
+                        const color = endpoint.usagePercentage > 80 ? '#f00' : 
+                                    endpoint.usagePercentage > 60 ? '#fa0' : '#0f0';
+                        
+                        detailsHtml += `
+                            <div style="margin: 5px 0; color: ${color};">
+                                ${endpoint.endpoint}: ${endpoint.used}/${endpoint.limit} 
+                                (${endpoint.usagePercentage}%) 
+                                - Reset in ${Math.ceil(endpoint.timeUntilReset / 60000)}min
+                            </div>
+                        `;
+                    });
+                    
+                    if (totalQueue > 0) {
+                        detailsHtml += `<div style="color: #fa0; margin-top: 10px;">Queue: ${totalQueue} requests pending</div>`;
+                    }
+                    
+                    rateLimitDetails.innerHTML = detailsHtml;
+                }
+            } catch (error) {
+                console.error('Error fetching rate limit info:', error);
+            }
+        }
+
+        // Initialize
+        loadInitial();
+        setupFilters();
+        loadAIInsights();
+
+        // Auto-refresh live data every 30 seconds
+        setInterval(refreshLiveData, 30000);
+
+        // Update rate limit info every 10 seconds
+        setInterval(updateRateLimitInfo, 10000);
+        updateRateLimitInfo(); // Initial load
+    </script>
+</body>
+</html>
