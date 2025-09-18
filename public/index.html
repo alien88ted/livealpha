@@ -122,10 +122,22 @@
         let accounts = new Set();
         let enabledAccounts = new Set(['cz_binance', 'CookerFlips', 'ShockedJS', 'LabsNoor', 'alien88ted']);
 
+        function parseDateUtc(value) {
+            if (!value) return new Date();
+            if (value instanceof Date) return value;
+            const s = String(value);
+            // If already ISO with T, trust it
+            if (s.includes('T')) return new Date(s);
+            // MySQL TIMESTAMP without TZ -> treat as UTC
+            // Convert "YYYY-MM-DD HH:MM:SS" -> "YYYY-MM-DDTHH:MM:SSZ"
+            return new Date(s.replace(' ', 'T') + 'Z');
+        }
+
         function formatTime(dateString) {
-            const date = new Date(dateString);
+            const date = parseDateUtc(dateString);
             const now = new Date();
-            const diff = Math.floor((now - date) / 1000);
+            let diff = Math.floor((now - date) / 1000);
+            if (diff < 0) diff = 0; // clamp future timestamps from TZ drift
 
             if (diff < 60) return `${diff}s`;
             if (diff < 3600) return `${Math.floor(diff / 60)}m`;

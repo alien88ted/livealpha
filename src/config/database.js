@@ -46,11 +46,16 @@ async function initializeDB() {
             connectionLimit: 10,
             queueLimit: 0,
             connectTimeout: 60000,
-            ssl
+            ssl,
+            timezone: 'Z',
+            dateStrings: true
         });
 
-        // Test the connection
+        // Test the connection and enforce UTC at session level
         const connection = await pool.getConnection();
+        try {
+            await connection.execute("SET time_zone = '+00:00'");
+        } catch {}
         console.log('✅ Database connection established');
         connection.release();
 
