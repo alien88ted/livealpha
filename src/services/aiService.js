@@ -315,6 +315,52 @@ class AIService {
 		}
 	}
 
+	async compactFromContent(content) {
+		if (!content) return { tickers: [], headline: '' };
+
+		const prompt = `Extract the most important tickers and create a one-line headline from this crypto analysis. Return JSON only:
+
+<analysis>
+${content}
+</analysis>
+
+Return JSON with:
+- "tickers": array of 3-6 most important $TICKER symbols mentioned
+- "headline": one concise sentence (max 100 chars) summarizing the key insight
+
+Focus on actionable information and trending narratives. Example:
+{"tickers": ["$BTC", "$ETH", "$SOL"], "headline": "DeFi yields surge as institutional adoption accelerates"}`;
+
+		try {
+			const response = await this.runModel(this.haikuModel, 1024, prompt);
+			const parsed = JSON.parse(response.trim());
+			return {
+				tickers: Array.isArray(parsed.tickers) ? parsed.tickers.slice(0, 6) : [],
+				headline: typeof parsed.headline === 'string' ? parsed.headline.slice(0, 150) : ''
+			};
+		} catch (error) {
+			// Fallback to regex extraction
+			const tickerSet = new Set((content.match(/\$[A-Z]{2,10}/g) || []).slice(0, 6));
+			const lines = content.split('\n').map(l => l.trim()).filter(Boolean);
+			let headline = '';
+
+			const hotIdx = lines.findIndex(l => l.toLowerCase().startsWith('**hot now') || l.toLowerCase().startsWith('hot now'));
+			if (hotIdx !== -1) {
+				headline = lines[hotIdx + 1] || lines[hotIdx];
+			}
+
+			if (!headline) {
+				const aiPick = lines.find(l => /ai pick/i.test(l));
+				headline = aiPick || lines.find(l => l.length > 20 && l.length < 120) || 'Market analysis updated';
+			}
+
+			return {
+				tickers: Array.from(tickerSet),
+				headline: headline.replace(/\*\*/g, '').slice(0, 100)
+			};
+		}
+	}
+
 	getLogs() { return this.logs; }
 }
 
