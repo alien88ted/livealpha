@@ -4,6 +4,9 @@ const AIService = require('../services/aiService');
 
 const router = express.Router();
 
+// In-memory webhook config storage (could be moved to database later)
+let webhookConfigs = new Map();
+
 /**
  * Get fresh live tweets from Twitter API
  */
@@ -296,6 +299,59 @@ router.get('/usage', async (req, res) => {
 });
 
 /**
+ * Get AI usage statistics and metrics
+ */
+router.get('/ai/usage', async (req, res) => {
+    try {
+        const ai = new AIService();
+        const usageStats = ai.getUsageStats();
+
+        // Get historical usage from database
+        const pool = getPool();
+        const [hourlyUsage] = await pool.execute(
+            `SELECT
+                DATE_FORMAT(created_at, '%Y-%m-%d %H:00:00') as hour,
+                COUNT(*) as requests,
+                SUM(input_tokens + output_tokens) as tokens,
+                SUM(cost_usd) as cost,
+                AVG(execution_time_ms) as avg_latency
+             FROM ai_usage_log
+             WHERE created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
+             GROUP BY hour
+             ORDER BY hour DESC`
+        );
+
+        const [modelBreakdown] = await pool.execute(
+            `SELECT
+                model,
+                COUNT(*) as requests,
+                SUM(input_tokens + output_tokens) as tokens,
+                SUM(cost_usd) as cost,
+                AVG(execution_time_ms) as avg_latency
+             FROM ai_usage_log
+             WHERE created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
+             GROUP BY model`
+        );
+
+        res.json({
+            current: usageStats,
+            trends: {
+                hourly: hourlyUsage,
+                models: modelBreakdown
+            },
+            alerts: {
+                budgetAlert: usageStats.monthly.budgetUsed > 80,
+                highLatency: hourlyUsage.some(h => h.avg_latency > 10000),
+                costSpike: hourlyUsage.length > 1 && hourlyUsage[0].cost > hourlyUsage[1].cost * 2
+            }
+        });
+    } catch (error) {
+        console.error('❌ Error fetching AI usage stats:', error.message);
+        res.status(500).json({ error: 'Failed to fetch AI usage statistics' });
+    }
+});
+
+/**
  * Get tracker status
  */
 router.get('/status', async (req, res) => {
@@ -358,5 +414,220 @@ router.post('/control', async (req, res) => {
         res.status(500).json({ error: `Failed to ${req.body.action} tracker: ${error.message}` });
     }
 });
+
+/**
+ * Discord Webhook endpoints
+ */
+
+// Test webhook endpoint
+router.post('/webhook/test', async (req, res) => {
+    try {
+        const { url } = req.body;
+
+        if (!url) {
+            return res.status(400).json({ error: 'Webhook URL is required' });
+        }
+
+        // Send test message to Discord
+        const testPayload = {
+            embeds: [{
+                title: "🧪 LiveAlpha Webhook Test",
+                description: "Your Discord webhook is working correctly!",
+                color: 0x00C851,
+                timestamp: new Date().toISOString(),
+                footer: {
+                    text: "LiveAlpha • Test Message"
+                }
+            }]
+        };
+
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(testPayload)
+        });
+
+        if (!response.ok) {
+            throw new Error(`Discord API responded with ${response.status}`);
+        }
+
+        console.log('✅ Test webhook sent successfully');
+        res.json({ success: true, message: 'Test message sent successfully' });
+    } catch (error) {
+        console.error('❌ Error sending test webhook:', error.message);
+        res.status(500).json({ error: 'Failed to send test message', details: error.message });
+    }
+});
+
+// Save webhook configuration
+router.post('/webhook/config', async (req, res) => {
+    try {
+        const config = req.body;
+
+        if (!config.url) {
+            return res.status(400).json({ error: 'Webhook URL is required' });
+        }
+
+        // Store configuration (using client ID as key, could be improved with user auth)
+        const clientId = req.ip || 'default';
+        const webhookConfig = {
+            ...config,
+            createdAt: new Date(),
+            updatedAt: new Date()
+        };
+
+        webhookConfigs.set(clientId, webhookConfig);
+
+        // Register with the notifier service if available
+        const tracker = req.app.get('tracker');
+        if (tracker && tracker.notifier) {
+            tracker.notifier.registerDiscordWebhook(clientId, webhookConfig);
+        }
+
+        console.log(`✅ Webhook config saved for client: ${clientId}`);
+        res.json({ success: true, message: 'Webhook configuration saved' });
+    } catch (error) {
+        console.error('❌ Error saving webhook config:', error.message);
+        res.status(500).json({ error: 'Failed to save webhook configuration' });
+    }
+});
+
+// Get webhook configuration
+router.get('/webhook/config', (req, res) => {
+    try {
+        const clientId = req.ip || 'default';
+        const config = webhookConfigs.get(clientId);
+
+        if (!config) {
+            return res.json({ configured: false });
+        }
+
+        // Return config without sensitive URL
+        res.json({
+            configured: true,
+            enabled: config.enabled,
+            notifications: config.notifications,
+            accounts: config.accounts,
+            createdAt: config.createdAt
+        });
+    } catch (error) {
+        console.error('❌ Error fetching webhook config:', error.message);
+        res.status(500).json({ error: 'Failed to fetch webhook configuration' });
+    }
+});
+
+// Function to send Discord notification (used by other services)
+async function sendDiscordNotification(type, data, clientId = 'default') {
+    try {
+        const config = webhookConfigs.get(clientId);
+        if (!config || !config.enabled || !config.url) {
+            return false;
+        }
+
+        let embed;
+        let shouldSend = false;
+
+        switch (type) {
+            case 'tweet':
+                if (config.notifications.allTweets && config.accounts.includes(data.username)) {
+                    shouldSend = true;
+                    embed = {
+                        title: `🚨 Alpha Tweet from @${data.username}`,
+                        description: data.text.substring(0, 500) + (data.text.length > 500 ? '...' : ''),
+                        color: data.isTest ? 0x007AFF : 0xFF6600,
+                        timestamp: new Date(data.created_at).toISOString(),
+                        fields: [
+                            {
+                                name: "Engagement",
+                                value: `❤️ ${data.like_count || 0} | 🔄 ${data.retweet_count || 0} | 💬 ${data.reply_count || 0}`,
+                                inline: true
+                            },
+                            {
+                                name: "Link",
+                                value: `[View Tweet](https://twitter.com/${data.username}/status/${data.id})`,
+                                inline: true
+                            }
+                        ],
+                        footer: {
+                            text: `LiveAlpha • ${data.isTest ? 'Test' : 'Alpha'}`
+                        }
+                    };
+                }
+                break;
+
+            case 'high_engagement':
+                if (config.notifications.highEngagement && config.accounts.includes(data.username)) {
+                    const totalEngagement = (data.like_count || 0) + (data.retweet_count || 0);
+                    if (totalEngagement >= 1000) {
+                        shouldSend = true;
+                        embed = {
+                            title: `🔥 High Engagement Alert`,
+                            description: `@${data.username}: ${data.text.substring(0, 400)}`,
+                            color: 0xFF3B30,
+                            timestamp: new Date(data.created_at).toISOString(),
+                            fields: [
+                                {
+                                    name: "Engagement",
+                                    value: `❤️ ${data.like_count || 0} | 🔄 ${data.retweet_count || 0} | 💬 ${data.reply_count || 0}`,
+                                    inline: true
+                                }
+                            ]
+                        };
+                    }
+                }
+                break;
+
+            case 'ai_insight':
+                if (config.notifications.aiInsights) {
+                    shouldSend = true;
+                    embed = {
+                        title: "🤖 Alpha Insights Update",
+                        description: data.headline || "New market analysis available",
+                        color: 0xAF52DE,
+                        timestamp: new Date().toISOString(),
+                        fields: data.tickers && data.tickers.length > 0 ? [
+                            {
+                                name: "Tickers",
+                                value: data.tickers.join(', '),
+                                inline: true
+                            }
+                        ] : [],
+                        footer: {
+                            text: "LiveAlpha • AI Analysis"
+                        }
+                    };
+                }
+                break;
+        }
+
+        if (shouldSend && embed) {
+            const response = await fetch(config.url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ embeds: [embed] })
+            });
+
+            if (!response.ok) {
+                console.error(`❌ Discord webhook failed: ${response.status}`);
+                return false;
+            }
+
+            console.log(`✅ Discord notification sent: ${type}`);
+            return true;
+        }
+
+        return false;
+    } catch (error) {
+        console.error('❌ Error sending Discord notification:', error.message);
+        return false;
+    }
+}
+
+// Export webhook function for use by other services
+router.sendDiscordNotification = sendDiscordNotification;
 
 module.exports = router;

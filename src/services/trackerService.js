@@ -13,7 +13,7 @@ class TrackerService {
         this.syncPromise = null; // share in-flight sync among callers
         
 		// Default accounts configuration
-		this.DEFAULT_ACCOUNTS = ['cz_binance', 'CookerFlips', 'ShockedJS', 'LabsNoor'];
+		this.DEFAULT_ACCOUNTS = ['cz_binance', 'CookerFlips', 'ShockedJS', 'LabsNoor', '0xpeely', 'km_trades', 'astaso1'];
         this.TEST_ACCOUNTS = ['alien88ted'];
 		this.dynamicAccounts = new Set(); // from DB tracked_accounts
     }
@@ -302,93 +302,8 @@ class TrackerService {
         }
 
         console.log(`🎉 One-time backfill complete! Total tweets: ${this.backfillState.totalTweetsBackfilled}`);
-
-        // Initialize variables for backfill loop
-        const maxBackfillRequests = 50; // Maximum requests per backfill session
-        const startAccount = this.backfillState.currentAccount;
-        let requestsUsed = 0;
-
-        // Cycle through accounts
-        while (requestsUsed < maxBackfillRequests && this.isRunning) {
-            const accountInfo = this.backfillState.accountProgress[this.backfillState.currentAccount];
-
-            if (accountInfo.completed) {
-                console.log(`✅ @${accountInfo.username} backfill completed, moving to next`);
-                this.backfillState.currentAccount = (this.backfillState.currentAccount + 1) % this.backfillState.accountProgress.length;
-
-                // If we've cycled through all accounts, reset
-                if (this.backfillState.currentAccount === startAccount) {
-                    console.log('🔄 All accounts backfilled, resetting for next cycle');
-                    this.backfillState.accountProgress.forEach(acc => acc.completed = false);
-                    break;
-                }
-                continue;
-            }
-
-            try {
-                console.log(`📥 Backfilling @${accountInfo.username}...`);
-
-                // Get older tweets using the last ID we processed
-                const oldTweets = await this.twitterService.fetchLatestTweets(
-                    accountInfo.username, 
-                    false, 
-                    accountInfo.lastBackfillId
-                );
-                requestsUsed += 2; // userTimeline + getUserId
-
-                    if (oldTweets.length > 0) {
-                        // Save tweets and count new ones
-                        let newTweets = 0;
-                        const historicalTweets = [];
-                        for (const tweet of oldTweets) {
-                            try {
-                                await this.twitterService.saveTweetsToDb([tweet], accountInfo.username);
-                                newTweets++;
-                                // Prepare for historical emission
-                                historicalTweets.push({
-                                    ...tweet,
-                                    username: accountInfo.username,
-                                    isTest: this.TEST_ACCOUNTS.includes(accountInfo.username),
-                                    url: `https://twitter.com/${accountInfo.username}/status/${tweet.id}`,
-                                    tweetType: 'historical' // Mark as historical backfill
-                                });
-                            } catch (error) {
-                                if (!error.message.includes('Duplicate entry')) {
-                                    console.error(`❌ Error saving tweet ${tweet.id}:`, error.message);
-                                }
-                            }
-                        }
-
-                        // Emit historical tweets separately (non-disruptive)
-                        if (global.io && historicalTweets.length > 0) {
-                            global.io.emit('historicalTweets', historicalTweets);
-                        }
-
-                        this.backfillState.totalTweetsBackfilled += newTweets;
-                        accountInfo.lastBackfillId = oldTweets[oldTweets.length - 1].id;
-
-                        console.log(`📦 @${accountInfo.username}: +${newTweets}/${oldTweets.length} new tweets (${this.backfillState.totalTweetsBackfilled} total)`);
-                    } else {
-                    // No more tweets to backfill for this account
-                    accountInfo.completed = true;
-                    console.log(`✅ @${accountInfo.username} backfill completed (no more tweets)`);
-                }
-
-            } catch (error) {
-                console.error(`❌ Backfill error @${accountInfo.username}:`, error.message);
-                requestsUsed++; // Count failed requests too
-            }
-
-            // Move to next account
-            this.backfillState.currentAccount = (this.backfillState.currentAccount + 1) % this.backfillState.accountProgress.length;
-
-            // Small delay between accounts
-            await new Promise(resolve => setTimeout(resolve, 200));
-        }
-
-        this.backfillState.lastBackfillTime = Date.now();
-        console.log(`📈 Backfill session complete: used ${requestsUsed}/${maxBackfillRequests} requests`);
     }
+
 
     /**
      * Schedule next backfill based on API usage

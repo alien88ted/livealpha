@@ -363,7 +363,8 @@ class TwitterService {
                         ...tweet.data,
                         username,
                         isTest: isTestAccount,
-                        url: `https://twitter.com/${username}/status/${tweet.data.id}`
+                        url: `https://twitter.com/${username}/status/${tweet.data.id}`,
+                        tweetType: 'realtime' // Mark as real-time stream tweet
                     }];
 
                     // Update in-memory cache for instant UI
@@ -372,7 +373,9 @@ class TwitterService {
                     // Emit to connected clients via socket.io
                     const io = global.io;
                     if (io) {
-                        io.emit('newTweets', payload);
+                        // Emit both events for compatibility
+                        io.emit('newTweets', payload); // Backward compatibility
+                        io.emit('liveTweets', payload); // Enhanced UX - real-time priority
                     }
 
                     // Notify (Telegram) without blocking
@@ -459,6 +462,23 @@ class TwitterService {
         } catch (error) {
             console.error(`❌ Error getting oldest tweet ID for @${username}:`, error.message);
             return null;
+        }
+    }
+
+    /**
+     * Get tweet count for username from database
+     */
+    async getTweetCount(username) {
+        const pool = getPool();
+        try {
+            const [rows] = await pool.execute(
+                'SELECT COUNT(*) as count FROM cz_tweets WHERE username = ?',
+                [username]
+            );
+            return rows.length > 0 ? rows[0].count : 0;
+        } catch (error) {
+            console.error(`❌ Error getting tweet count for @${username}:`, error.message);
+            return 0;
         }
     }
 

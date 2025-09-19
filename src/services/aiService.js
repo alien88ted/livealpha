@@ -15,6 +15,19 @@ class AIService {
 		this.temperature = 0.3;
 		this.digestIntervalMs = 60 * 60 * 1000; // 1h
 		this.urgentCooldownMs = 5 * 60 * 1000; // 5 minutes cooldown for haiku flash
+
+		// AI Usage Tracking
+		this.usage = {
+			daily: { opus: 0, sonnet: 0, haiku: 0, cost: 0 },
+			monthly: { opus: 0, sonnet: 0, haiku: 0, cost: 0 },
+			session: { requests: 0, tokens: 0, cost: 0, startTime: Date.now() }
+		};
+		this.costs = {
+			'claude-opus-4-1-20250805': { input: 0.015, output: 0.075 }, // per 1k tokens
+			'claude-sonnet-4-20250514': { input: 0.003, output: 0.015 },
+			'claude-3-5-haiku-20241022': { input: 0.0001, output: 0.0005 }
+		};
+		this.monthlyBudget = parseFloat(process.env.AI_MONTHLY_BUDGET || '500');
 		this.state = {
 			phase: 'idle',
 			running: false,
@@ -92,14 +105,78 @@ class AIService {
 	}
 
 	async runModel(model, maxTokens, promptText) {
+		const startTime = Date.now();
 		const res = await this.client.messages.create({
 			model,
 			max_tokens: maxTokens,
 			temperature: this.temperature,
 			messages: [{ role: 'user', content: [{ type: 'text', text: promptText }] }]
 		});
+
+		// Track usage
+		const inputTokens = res.usage?.input_tokens || 0;
+		const outputTokens = res.usage?.output_tokens || 0;
+		const executionTime = Date.now() - startTime;
+
+		await this.trackUsage(model, inputTokens, outputTokens, executionTime);
+
 		const part = (res?.content && res.content[0] && res.content[0].type === 'text') ? res.content[0].text : JSON.stringify(res);
 		return part;
+	}
+
+	async trackUsage(model, inputTokens, outputTokens, executionTime) {
+		try {
+			const modelCosts = this.costs[model] || { input: 0.003, output: 0.015 };
+			const cost = (inputTokens * modelCosts.input + outputTokens * modelCosts.output) / 1000;
+
+			// Update session usage
+			this.usage.session.requests++;
+			this.usage.session.tokens += (inputTokens + outputTokens);
+			this.usage.session.cost += cost;
+
+			// Update daily/monthly usage (simplified - in production use proper date handling)
+			const modelType = model.includes('opus') ? 'opus' : model.includes('sonnet') ? 'sonnet' : 'haiku';
+			this.usage.daily[modelType]++;
+			this.usage.daily.cost += cost;
+			this.usage.monthly[modelType]++;
+			this.usage.monthly.cost += cost;
+
+			// Store in database
+			const pool = getPool();
+			await pool.execute(
+				`INSERT INTO ai_usage_log (model, input_tokens, output_tokens, cost_usd, execution_time_ms, operation_type)
+				 VALUES (?, ?, ?, ?, ?, ?)`,
+				[model, inputTokens, outputTokens, cost, executionTime, 'analysis']
+			);
+
+			this.logEvent('usage_tracked', { model, inputTokens, outputTokens, cost, executionTime });
+		} catch (error) {
+			console.error('❌ Error tracking AI usage:', error.message);
+		}
+	}
+
+	getUsageStats() {
+		const sessionDuration = (Date.now() - this.usage.session.startTime) / 1000 / 60; // minutes
+		const budgetUsed = (this.usage.monthly.cost / this.monthlyBudget) * 100;
+
+		return {
+			session: {
+				...this.usage.session,
+				duration: Math.round(sessionDuration),
+				avgCostPerRequest: this.usage.session.requests > 0 ? this.usage.session.cost / this.usage.session.requests : 0
+			},
+			daily: this.usage.daily,
+			monthly: {
+				...this.usage.monthly,
+				budget: this.monthlyBudget,
+				budgetUsed: Math.round(budgetUsed),
+				remaining: this.monthlyBudget - this.usage.monthly.cost
+			},
+			efficiency: {
+				costPerInsight: this.usage.session.cost / Math.max(this.usage.session.requests, 1),
+				tokensPerMinute: sessionDuration > 0 ? this.usage.session.tokens / sessionDuration : 0
+			}
+		};
 	}
 
 	async decideShouldRunOpus(tweets) {

@@ -3,92 +3,639 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🔴 LIVE Alpha Twitter Tracker</title>
+    <title>LiveAlpha</title>
     <style>
-        body { font-family: monospace; margin: 20px; background: #000; color: #0f0; }
-        .container { max-width: 1200px; margin: 0 auto; }
-        .stats { display: flex; gap: 20px; margin-bottom: 20px; flex-wrap: wrap; }
-        .stat-box { border: 1px solid #0f0; padding: 10px; min-width: 120px; }
-        .tweets { border: 1px solid #0f0; padding: 10px; }
-        .tweet { border-bottom: 1px solid #333; padding: 10px 0; margin: 5px 0; }
-        .tweet:last-child { border-bottom: none; }
-        .tweet-header { color: #ff0; font-weight: bold; }
-        .tweet-meta { color: #aaa; font-size: 0.9em; }
-        .tweet-text { margin: 5px 0; }
-        .metrics { color: #0aa; font-size: 0.8em; }
-        .new-tweet { background: #001100; }
-        .test-tweet { background: #110011; border-left: 3px solid #f0f; }
-        .live-dot { width: 8px; height: 8px; background: #0f0; border-radius: 50%; display: inline-block; animation: blink 1s infinite; }
-        @keyframes blink { 0%, 50% { opacity: 1; } 51%, 100% { opacity: 0.3; } }
-        .filters { border: 1px solid #0f0; padding: 10px; margin-bottom: 20px; }
-        .filter-group { display: flex; gap: 20px; align-items: center; flex-wrap: wrap; }
-        .filter-item { display: flex; align-items: center; gap: 5px; }
-        .filter-item input[type="checkbox"] { margin: 0; }
-        .filter-item label { color: #0f0; cursor: pointer; }
-        .rate-limit-info { border: 1px solid #0f0; padding: 15px; margin: 20px 0; }
-        .rate-limit-info h3 { margin: 0 0 10px 0; color: #0f0; }
-        .error { color: #f00; }
-        .loading { color: #fa0; }
-        .success { color: #0f0; }
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --bg: #fafafa;
+            --surface: #ffffff;
+            --border: #e8e8e8;
+            --text: #0a0a0a;
+            --text-dim: #666666;
+            --text-subtle: #999999;
+            --accent: #000000;
+            --green: #00c851;
+            --orange: #ff6600;
+            --red: #dc3545;
+            --blue: #0066cc;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: #0a0a0a;
+                --surface: #1a1a1a;
+                --border: #2a2a2a;
+                --text: #ffffff;
+                --text-dim: #b3b3b3;
+                --text-subtle: #666666;
+                --accent: #ffffff;
+                --green: #00ff88;
+                --orange: #ff8833;
+            }
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Inter", sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            font-size: 15px;
+            line-height: 1.6;
+            -webkit-font-smoothing: antialiased;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 40px 20px;
+        }
+
+        .header {
+            margin-bottom: 60px;
+        }
+
+        .header h1 {
+            font-size: 32px;
+            font-weight: 800;
+            letter-spacing: -0.02em;
+            color: var(--text);
+            margin-bottom: 8px;
+        }
+
+        .header .subtitle {
+            font-size: 16px;
+            color: var(--text-dim);
+            font-weight: 400;
+        }
+
+        .status-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 50px;
+        }
+
+        .status-left {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--text-dim);
+        }
+
+        .status-right {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            font-size: 13px;
+            color: var(--text-subtle);
+        }
+
+        .system-status {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .live-indicator {
+            width: 6px;
+            height: 6px;
+            background: var(--green);
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 1px;
+            background: var(--border);
+            border-radius: 12px;
+            overflow: hidden;
+            margin-bottom: 50px;
+        }
+
+        .stat-card {
+            background: var(--surface);
+            padding: 24px 20px;
+            text-align: center;
+            position: relative;
+        }
+
+        .stat-card:hover {
+            background: var(--bg);
+        }
+
+        .stat-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--text);
+            margin-bottom: 4px;
+        }
+
+        .stat-label {
+            font-size: 11px;
+            color: var(--text-subtle);
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+        }
+
+        .ai-status-idle {
+            color: var(--text-subtle) !important;
+        }
+
+        .ai-status-active {
+            color: var(--green) !important;
+        }
+
+        .ai-status-processing {
+            color: var(--orange) !important;
+            animation: fade 1.5s infinite;
+        }
+
+        @keyframes fade {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .insights-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 30px;
+            margin-bottom: 30px;
+        }
+
+        .insights-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 24px;
+        }
+
+        .insights-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--text);
+        }
+
+        .toggle-btn {
+            background: var(--text);
+            color: var(--surface);
+            border: none;
+            border-radius: 6px;
+            padding: 8px 16px;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: opacity 0.2s;
+        }
+
+        .toggle-btn:hover {
+            opacity: 0.8;
+        }
+
+        .tickers {
+            display: flex;
+            gap: 6px;
+            margin-bottom: 16px;
+            flex-wrap: wrap;
+        }
+
+        .ticker {
+            background: var(--border);
+            color: var(--text);
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            font-family: "SF Mono", Monaco, monospace;
+        }
+
+        .headline {
+            font-size: 15px;
+            line-height: 1.5;
+            color: var(--text-dim);
+        }
+
+        .filters-section {
+            margin-bottom: 30px;
+        }
+
+        .filters-title {
+            font-size: 14px;
+            font-weight: 500;
+            margin-bottom: 12px;
+            color: var(--text-subtle);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .filter-group {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .filter-item {
+            position: relative;
+        }
+
+        .filter-item input[type="checkbox"] {
+            display: none;
+        }
+
+        .filter-item label {
+            display: inline-block;
+            padding: 8px 16px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            user-select: none;
+            color: var(--text-dim);
+            transition: all 0.15s ease;
+        }
+
+        .filter-item input[type="checkbox"]:checked + label {
+            background: var(--text);
+            color: var(--surface);
+            border-color: var(--text);
+        }
+
+        .filter-item label:hover {
+            border-color: var(--text-dim);
+        }
+
+        .filter-item input[type="checkbox"]:checked + label:hover {
+            background: var(--text-dim);
+        }
+
+        /* Webhook Configuration Styles */
+        .webhook-status {
+            font-size: 14px;
+            color: var(--text-dim);
+        }
+
+        .webhook-form {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .form-label {
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text);
+        }
+
+        .form-input {
+            padding: 10px 12px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--bg);
+            color: var(--text);
+            font-size: 14px;
+            font-family: inherit;
+            transition: border-color 0.15s;
+        }
+
+        .form-input:focus {
+            outline: none;
+            border-color: var(--text);
+        }
+
+        .form-input::placeholder {
+            color: var(--text-subtle);
+        }
+
+        .webhook-options,
+        .webhook-accounts {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .webhook-option {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .webhook-option input[type="checkbox"] {
+            width: 16px;
+            height: 16px;
+            accent-color: var(--text);
+        }
+
+        .webhook-option label {
+            font-size: 14px;
+            cursor: pointer;
+            user-select: none;
+            color: var(--text-dim);
+        }
+
+        .form-actions {
+            display: flex;
+            gap: 8px;
+            justify-content: flex-end;
+        }
+
+        .test-btn {
+            background: var(--bg);
+            color: var(--text-dim);
+        }
+
+        .save-btn {
+            background: var(--green);
+            color: white;
+            border-color: var(--green);
+        }
+
+        .save-btn:hover {
+            background: var(--text);
+            border-color: var(--text);
+        }
+
+        .tweets-container {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+
+        .tweet {
+            border-bottom: 1px solid var(--border);
+            padding: 30px;
+            transition: background-color 0.15s;
+        }
+
+        .tweet:last-child {
+            border-bottom: none;
+        }
+
+        .tweet:hover {
+            background: var(--bg);
+        }
+
+        .new-tweet {
+            border-left: 3px solid var(--green);
+            background: var(--bg);
+        }
+
+        .test-tweet {
+            border-left: 3px solid var(--blue);
+        }
+
+        .tweet-header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            margin-bottom: 16px;
+        }
+
+        .tweet-author {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .alpha-badge {
+            background: var(--text);
+            color: var(--surface);
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .test-badge {
+            background: var(--blue);
+            color: white;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .username {
+            font-weight: 600;
+            font-size: 15px;
+            color: var(--text);
+        }
+
+        .tweet-meta {
+            font-size: 13px;
+            color: var(--text-subtle);
+            margin-bottom: 12px;
+        }
+
+        .tweet-actions {
+            display: flex;
+            gap: 6px;
+        }
+
+        .action-btn {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            color: var(--text-dim);
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+
+        .action-btn:hover {
+            background: var(--text);
+            color: var(--surface);
+        }
+
+        .tweet-text {
+            font-size: 15px;
+            line-height: 1.6;
+            margin-bottom: 16px;
+            color: var(--text);
+        }
+
+        .tweet-metrics {
+            display: flex;
+            gap: 16px;
+            font-size: 13px;
+            color: var(--text-subtle);
+        }
+
+        .metric {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .error-state,
+        .loading-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--text-dim);
+            font-size: 14px;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 30px 16px;
+            }
+
+            .header {
+                margin-bottom: 40px;
+            }
+
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            .stat-card {
+                padding: 20px 16px;
+            }
+
+            .insights-card {
+                padding: 20px;
+                margin-bottom: 24px;
+            }
+
+            .filter-group {
+                gap: 6px;
+            }
+
+            .filter-item label {
+                padding: 6px 12px;
+                font-size: 12px;
+            }
+
+            .tweet {
+                padding: 24px 20px;
+            }
+
+            .tweet-header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 12px;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .container {
+                padding: 20px 12px;
+            }
+
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>🔴 LIVE ALPHA TRACKER</h1>
+        <div class="header">
+            <h1>LiveAlpha</h1>
+            <div class="subtitle">Real-time Twitter insights & alpha tracking</div>
+        </div>
 
-        <div class="rate-limit-info" style="margin-top:10px;">
-            <h3>🤖 AI Insights</h3>
+        <div class="status-bar">
+            <div class="status-left">
+                <div class="live-indicator"></div>
+                <span id="connectionStatus">Starting</span>
+            </div>
+            <div class="status-right">
+                <div class="system-status" id="systemStatus" style="display: none;">
+                    <span id="planType"></span>
+                    <span id="usagePercent"></span>
+                </div>
+            </div>
+        </div>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-value" id="totalTweets">0</div>
+                <div class="stat-label">Total</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="alphaTweets">0</div>
+                <div class="stat-label">Alpha</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="testTweets">0</div>
+                <div class="stat-label">Test</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="activeAccounts">0</div>
+                <div class="stat-label">Accounts</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="apiUsage">0%</div>
+                <div class="stat-label">API Usage</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="queueLength">0</div>
+                <div class="stat-label">Queue</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="aiPhase">●</div>
+                <div class="stat-label">AI</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">
+                    <a id="memoryLink" href="#" style="color: var(--accent-blue); text-decoration: none;">Memory</a>
+                </div>
+                <div class="stat-label">AI Memory</div>
+            </div>
+        </div>
+
+        <div class="insights-card">
+            <div class="insights-header">
+                <div class="insights-title">
+                    Alpha Insights
+                </div>
+                <button id="aiToggle" class="toggle-btn">Details</button>
+            </div>
             <div id="aiCompact">
-                <span id="aiTickers"></span>
-                <span id="aiHeadline"></span>
-                <button id="aiToggle" style="margin-left:10px;">Show full</button>
+                <div class="tickers" id="aiTickersContainer"></div>
+                <div class="headline" id="aiHeadline">Analyzing market activity...</div>
             </div>
-            <div id="aiInsights" style="display:none; margin-top:8px;"></div>
-        </div>
-        <div class="stats">
-            <div class="stat-box">
-                <div>TOTAL: <span id="totalTweets">0</span></div>
-            </div>
-            <div class="stat-box">
-                <div>ALPHA: <span id="alphaTweets">0</span></div>
-            </div>
-            <div class="stat-box">
-                <div>TEST: <span id="testTweets">0</span></div>
-            </div>
-            <div class="stat-box">
-                <div>LIVE: <span class="live-dot"></span> <span id="connectionStatus">CONNECTING</span></div>
-            </div>
-            <div class="stat-box">
-                <div>FRESH: <span id="refreshStatus">LOADING</span></div>
-            </div>
-            <div class="stat-box">
-                <div>ACCOUNTS: <span id="activeAccounts">0</span></div>
-            </div>
-            <div class="stat-box">
-                <div>API: <span id="apiUsage">0%</span></div>
-            </div>
-            <div class="stat-box">
-                <div>QUEUE: <span id="queueLength">0</span></div>
-            </div>
-            <div class="stat-box">
-                <div>AI: <span id="aiPhase">idle</span></div>
-            </div>
-            <div class="stat-box">
-                <div><a id="memoryLink" href="#" style="color:#0f0; text-decoration:underline;">AI Memory</a></div>
-            </div>
+            <div id="aiInsights" style="display:none; margin-top:16px; padding:16px; background:var(--bg); border-radius:8px; font-size:14px; line-height:1.5; color: var(--text-dim);"></div>
         </div>
 
-        <div class="rate-limit-info" id="rateLimitInfo" style="display: none;">
-            <h3>📊 Rate Limit Status</h3>
-            <div id="rateLimitDetails"></div>
-        </div>
 
-        <div class="filters">
+        <div class="filters-section">
+            <div class="filters-title">Accounts</div>
             <div class="filter-group">
-                <span>ACCOUNTS:</span>
                 <div class="filter-item">
                     <input type="checkbox" id="filter-cz_binance" checked>
                     <label for="filter-cz_binance">@cz_binance</label>
+                </div>
+                <div class="filter-item">
+                    <input type="checkbox" id="filter-justinsuntron" checked>
+                    <label for="filter-justinsuntron">@justinsuntron</label>
                 </div>
                 <div class="filter-item">
                     <input type="checkbox" id="filter-CookerFlips" checked>
@@ -103,14 +650,101 @@
                     <label for="filter-LabsNoor">@LabsNoor</label>
                 </div>
                 <div class="filter-item">
+                    <input type="checkbox" id="filter-peacefuldecay" checked>
+                    <label for="filter-peacefuldecay">@peacefuldecay</label>
+                </div>
+                <div class="filter-item">
+                    <input type="checkbox" id="filter-0xpeely" checked>
+                    <label for="filter-0xpeely">@0xpeely</label>
+                </div>
+                <div class="filter-item">
+                    <input type="checkbox" id="filter-km_trades" checked>
+                    <label for="filter-km_trades">@km_trades</label>
+                </div>
+                <div class="filter-item">
+                    <input type="checkbox" id="filter-astaso1" checked>
+                    <label for="filter-astaso1">@astaso1</label>
+                </div>
+                <div class="filter-item">
                     <input type="checkbox" id="filter-alien88ted" checked>
                     <label for="filter-alien88ted">@alien88ted (TEST)</label>
                 </div>
             </div>
         </div>
 
-        <div class="tweets">
-            <div id="tweetsContent">Loading...</div>
+        <div class="insights-card">
+            <div class="insights-header">
+                <div class="insights-title">Discord Notifications</div>
+                <button id="webhookToggle" class="toggle-btn">Configure</button>
+            </div>
+            <div id="webhookCompact">
+                <div class="webhook-status" id="webhookStatus">Not configured</div>
+            </div>
+            <div id="webhookConfig" style="display:none; margin-top:20px;">
+                <div class="webhook-form">
+                    <div class="form-group">
+                        <label for="webhookUrl" class="form-label">Webhook URL</label>
+                        <input type="url" id="webhookUrl" class="form-input" placeholder="https://discord.com/api/webhooks/...">
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Notification Types</label>
+                        <div class="webhook-options">
+                            <div class="webhook-option">
+                                <input type="checkbox" id="notify-all-tweets" checked>
+                                <label for="notify-all-tweets">All tweets</label>
+                            </div>
+                            <div class="webhook-option">
+                                <input type="checkbox" id="notify-ai-insights">
+                                <label for="notify-ai-insights">AI insights</label>
+                            </div>
+                            <div class="webhook-option">
+                                <input type="checkbox" id="notify-high-engagement">
+                                <label for="notify-high-engagement">High engagement (1K+ likes)</label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Account Filter</label>
+                        <div class="webhook-accounts" id="webhookAccounts">
+                            <div class="webhook-option">
+                                <input type="checkbox" id="webhook-cz_binance" checked>
+                                <label for="webhook-cz_binance">@cz_binance</label>
+                            </div>
+                            <div class="webhook-option">
+                                <input type="checkbox" id="webhook-justinsuntron" checked>
+                                <label for="webhook-justinsuntron">@justinsuntron</label>
+                            </div>
+                            <div class="webhook-option">
+                                <input type="checkbox" id="webhook-CookerFlips" checked>
+                                <label for="webhook-CookerFlips">@CookerFlips</label>
+                            </div>
+                            <div class="webhook-option">
+                                <input type="checkbox" id="webhook-ShockedJS" checked>
+                                <label for="webhook-ShockedJS">@ShockedJS</label>
+                            </div>
+                            <div class="webhook-option">
+                                <input type="checkbox" id="webhook-LabsNoor" checked>
+                                <label for="webhook-LabsNoor">@LabsNoor</label>
+                            </div>
+                            <div class="webhook-option">
+                                <input type="checkbox" id="webhook-peacefuldecay" checked>
+                                <label for="webhook-peacefuldecay">@peacefuldecay</label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-actions">
+                        <button id="testWebhook" class="action-btn test-btn">Test</button>
+                        <button id="saveWebhook" class="action-btn save-btn">Save</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="tweets-container">
+            <div id="tweetsContent" class="loading-state">Loading tweets...</div>
         </div>
 
     </div>
@@ -120,7 +754,7 @@
         const socket = io();
         let allTweets = [];
         let accounts = new Set();
-        let enabledAccounts = new Set(['cz_binance', 'CookerFlips', 'ShockedJS', 'LabsNoor', 'alien88ted']);
+        let enabledAccounts = new Set(['cz_binance', 'justinsuntron', 'CookerFlips', 'ShockedJS', 'LabsNoor', 'peacefuldecay', '0xpeely', 'km_trades', 'astaso1', 'alien88ted']);
 
         function parseDateUtc(value) {
             if (!value) return new Date();
@@ -172,6 +806,34 @@
             return num.toString();
         }
 
+        function updateAIStatus(aiData) {
+            const aiElement = document.getElementById('aiPhase');
+            const phase = aiData.phase || 'idle';
+            const isRunning = aiData.running || false;
+
+            // Remove all status classes
+            aiElement.className = aiElement.className.replace(/ai-status-\w+/g, '');
+
+            if (phase === 'idle') {
+                if (aiData.idleReason && aiData.idleReason.includes('waiting')) {
+                    aiElement.textContent = '○';
+                    aiElement.classList.add('ai-status-idle');
+                } else {
+                    aiElement.textContent = '●';
+                    aiElement.classList.add('ai-status-idle');
+                }
+            } else if (isRunning || phase.includes('processing') || phase.includes('analyzing')) {
+                aiElement.textContent = '●';
+                aiElement.classList.add('ai-status-processing');
+            } else if (phase.includes('active') || phase.includes('ready')) {
+                aiElement.textContent = '●';
+                aiElement.classList.add('ai-status-active');
+            } else {
+                aiElement.textContent = '●';
+                aiElement.classList.add('ai-status-idle');
+            }
+        }
+
         function compactFallbackFromContent(content) {
             if (!content) return { tickers: [], headline: '' };
             const tickerSet = new Set((content.match(/\$[A-Z]{2,10}/g) || []).slice(0, 6));
@@ -197,22 +859,50 @@
             return `
                 <div class="tweet ${isNew ? 'new-tweet' : ''} ${isTest ? 'test-tweet' : ''}" data-id="${tweet.id}">
                     <div class="tweet-header">
-                        ${isTest ? '🧪 TEST' : '🚨 ALPHA'} @${username}
-                        <span class="tweet-meta">${formatTime(tweet.created_at, tweet.id)} ago | ID: ${tweet.id}</span>
-                        <span class="tweet-actions" style="float:right;">
-                            <button onclick="openTweet('${username}','${tweet.id}')">Open</button>
-                            ${tweet.conversation_id && tweet.conversation_id !== tweet.id ? `<button onclick="openThread('${username}','${tweet.conversation_id}')">Open thread</button>` : ''}
-                        </span>
+                        <div class="tweet-author">
+                            <div class="${isTest ? 'test-badge' : 'alpha-badge'}">${isTest ? 'Test' : 'Alpha'}</div>
+                            <div class="username">@${username}</div>
+                        </div>
+                        <div class="tweet-actions">
+                            <button class="action-btn" onclick="openTweet('${username}','${tweet.id}')">Open</button>
+                            ${tweet.conversation_id && tweet.conversation_id !== tweet.id ? `<button class="action-btn" onclick="openThread('${username}','${tweet.conversation_id}')">Thread</button>` : ''}
+                        </div>
+                    </div>
+                    <div class="tweet-meta">
+                        <span>${formatTime(tweet.created_at, tweet.id)} ago</span>
+                        <span>ID: ${tweet.id}</span>
                     </div>
                     <div class="tweet-text">${tweet.text}</div>
-                    <div class="metrics">
-                        ❤️${formatNum(tweet.like_count || 0)}
-                        🔄${formatNum(tweet.retweet_count || 0)}
-                        💬${formatNum(tweet.reply_count || 0)}
-                        👁️${formatNum(tweet.impression_count || 0)}
+                    <div class="tweet-metrics">
+                        <div class="metric">
+                            <span>❤️</span>
+                            <span>${formatNum(tweet.like_count || 0)}</span>
+                        </div>
+                        <div class="metric">
+                            <span>🔄</span>
+                            <span>${formatNum(tweet.retweet_count || 0)}</span>
+                        </div>
+                        <div class="metric">
+                            <span>💬</span>
+                            <span>${formatNum(tweet.reply_count || 0)}</span>
+                        </div>
+                        <div class="metric">
+                            <span>👁️</span>
+                            <span>${formatNum(tweet.impression_count || 0)}</span>
+                        </div>
                     </div>
                 </div>
             `;
+        }
+
+        // Helper function to re-render all tweets (used for historical tweet insertion)
+        function renderAllTweets() {
+            const container = document.getElementById('tweetsContent');
+            const filteredTweets = filterTweets();
+            
+            container.innerHTML = filteredTweets
+                .map(tweet => renderTweet(tweet, false))
+                .join('');
         }
 
         function openTweet(username, id) {
@@ -237,14 +927,14 @@
         function renderAllTweets() {
             const container = document.getElementById('tweetsContent');
             if (allTweets.length === 0) {
-                container.innerHTML = 'No tweets tracked yet...';
+                container.innerHTML = '<div class="error-state">No tweets tracked yet...</div>';
                 return;
             }
 
             const filteredTweets = allTweets.filter(tweet => enabledAccounts.has(tweet.username));
 
             if (filteredTweets.length === 0) {
-                container.innerHTML = 'No tweets from selected accounts...';
+                container.innerHTML = '<div class="error-state">No tweets from selected accounts...</div>';
                 return;
             }
 
@@ -273,14 +963,13 @@
 
         async function loadInitial() {
             try {
-                document.getElementById('refreshStatus').textContent = 'LOADING';
                 console.log('🔄 Loading fresh tweets from Twitter API...');
                 const response = await fetch('/api/tweets/live');
-                
+
                 if (!response.ok) {
                     throw new Error(`HTTP ${response.status}: ${response.statusText}`);
                 }
-                
+
                 const tweets = await response.json();
 
                 allTweets = tweets.map(tweet => ({
@@ -290,25 +979,22 @@
                 }));
 
                 renderAllTweets();
-                document.getElementById('refreshStatus').textContent = 'READY';
                 console.log(`✅ Loaded ${allTweets.length} fresh tweets`);
             } catch (error) {
                 console.error('Error loading fresh tweets:', error);
-                document.getElementById('tweetsContent').innerHTML = `<div class="error">Error loading fresh tweets: ${error.message}</div>`;
-                document.getElementById('refreshStatus').textContent = 'ERROR';
+                document.getElementById('tweetsContent').innerHTML = `<div class="error-state">Error loading tweets: ${error.message}</div>`;
             }
         }
 
         async function refreshLiveData() {
             try {
-                document.getElementById('refreshStatus').textContent = 'REFRESHING';
                 console.log('🔄 Refreshing live tweets...');
                 const response = await fetch('/api/tweets/live');
-                
+
                 if (!response.ok) {
                     throw new Error(`HTTP ${response.status}: ${response.statusText}`);
                 }
-                
+
                 const freshTweets = await response.json();
 
                 allTweets = freshTweets.map(tweet => ({
@@ -318,11 +1004,9 @@
                 }));
 
                 renderAllTweets();
-                document.getElementById('refreshStatus').textContent = 'READY';
                 console.log(`✅ Refreshed with ${allTweets.length} tweets`);
             } catch (error) {
                 console.error('Error refreshing:', error);
-                document.getElementById('refreshStatus').textContent = 'ERROR';
             }
         }
 
@@ -334,15 +1018,26 @@
                 if (data.content) {
                     document.getElementById('aiInsights').textContent = data.content;
                     const compact = data.compact || compactFallbackFromContent(data.content);
-                    const tickers = (compact.tickers || []).join(' · ');
+                    const tickers = compact.tickers || [];
                     const headline = compact.headline || '';
-                    document.getElementById('aiTickers').textContent = tickers ? `[ ${tickers} ] ` : '';
-                    document.getElementById('aiHeadline').textContent = headline;
+
+                    const tickersContainer = document.getElementById('aiTickersContainer');
+                    if (tickers.length > 0) {
+                        tickersContainer.innerHTML = tickers.map(ticker => `<span class="ticker">${ticker}</span>`).join('');
+                    } else {
+                        tickersContainer.innerHTML = '';
+                    }
+
+                    document.getElementById('aiHeadline').textContent = headline || 'Monitoring for alpha signals...';
                 } else {
-                    document.getElementById('aiInsights').textContent = 'No insights yet';
+                    document.getElementById('aiTickersContainer').innerHTML = '';
+                    document.getElementById('aiHeadline').textContent = 'Monitoring for alpha signals...';
+                    document.getElementById('aiInsights').textContent = 'No analysis available yet';
                 }
             } catch (e) {
-                document.getElementById('aiInsights').textContent = 'No insights yet';
+                document.getElementById('aiTickersContainer').innerHTML = '';
+                document.getElementById('aiHeadline').textContent = 'Monitoring for alpha signals...';
+                document.getElementById('aiInsights').textContent = 'Analysis service unavailable';
             }
         }
 
@@ -351,7 +1046,7 @@
             const btn = document.getElementById('aiToggle');
             const isHidden = full.style.display === 'none';
             full.style.display = isHidden ? 'block' : 'none';
-            btn.textContent = isHidden ? 'Hide full' : 'Show full';
+            btn.textContent = isHidden ? 'Hide Details' : 'Show Details';
         });
 
         document.getElementById('memoryLink').addEventListener('click', async (e) => {
@@ -390,12 +1085,12 @@
         // Socket events
         socket.on('connect', () => {
             console.log('Connected to server');
-            document.getElementById('connectionStatus').textContent = 'CONNECTED';
+            document.getElementById('connectionStatus').textContent = 'Live';
         });
 
         socket.on('disconnect', () => {
             console.log('Disconnected');
-            document.getElementById('connectionStatus').textContent = 'DISCONNECTED';
+            document.getElementById('connectionStatus').textContent = 'Offline';
         });
 
         socket.on('newTweets', (newTweets) => {
@@ -428,14 +1123,99 @@
             updateStats();
         });
 
+        // Enhanced socket events for proper tweet ordering
+        // Live tweets (real-time) - always at top with priority
+        socket.on('liveTweets', (liveTweets) => {
+            console.log('Live tweets (priority):', liveTweets);
+            
+            liveTweets.forEach(tweet => {
+                const processedTweet = {
+                    ...tweet,
+                    username: tweet.username || 'unknown',
+                    isTest: tweet.isTest || false
+                };
+
+                const existingIndex = allTweets.findIndex(t => t.id === tweet.id);
+                if (existingIndex === -1) {
+                    // ALWAYS insert live tweets at the top (highest priority)
+                    allTweets.unshift(processedTweet);
+
+                    const container = document.getElementById('tweetsContent');
+                    const newTweetHtml = renderTweet(processedTweet, true);
+                    container.insertAdjacentHTML('afterbegin', newTweetHtml);
+
+                    // Enhanced animation for live tweets
+                    setTimeout(() => {
+                        const newTweetEl = container.querySelector('.new-tweet');
+                        if (newTweetEl) {
+                            newTweetEl.classList.remove('new-tweet');
+                            newTweetEl.style.background = 'rgba(0, 255, 0, 0.1)'; // Live tweet highlight
+                            setTimeout(() => {
+                                newTweetEl.style.background = '';
+                            }, 5000);
+                        }
+                    }, 100);
+                } else {
+                    allTweets[existingIndex] = processedTweet;
+                }
+            });
+
+            updateStats();
+        });
+
+        // Historical tweets (backfill) - insert chronologically without disruption
+        socket.on('historicalTweets', (historicalTweets) => {
+            console.log('Historical tweets (background):', historicalTweets);
+            
+            historicalTweets.forEach(tweet => {
+                const processedTweet = {
+                    ...tweet,
+                    username: tweet.username || 'unknown',
+                    isTest: tweet.isTest || false
+                };
+
+                const existingIndex = allTweets.findIndex(t => t.id === tweet.id);
+                if (existingIndex === -1) {
+                    // Find correct chronological position (don't disrupt live tweets)
+                    const tweetTime = new Date(tweet.created_at).getTime();
+                    let insertIndex = allTweets.length; // Default to end
+                    
+                    for (let i = 0; i < allTweets.length; i++) {
+                        const existingTime = new Date(allTweets[i].created_at).getTime();
+                        if (tweetTime > existingTime) {
+                            insertIndex = i;
+                            break;
+                        }
+                    }
+                    
+                    // Insert at correct chronological position
+                    allTweets.splice(insertIndex, 0, processedTweet);
+                    
+                    // Re-render tweets to maintain order (background operation)
+                    setTimeout(() => {
+                        renderAllTweets();
+                    }, 100);
+                }
+            });
+
+            updateStats();
+        });
+
         socket.on('aiInsights', (payload) => {
             const content = payload?.content || '';
-            document.getElementById('aiInsights').textContent = content || 'No insights yet';
+            document.getElementById('aiInsights').textContent = content || 'No analysis available yet';
             const compact = payload?.compact || compactFallbackFromContent(content);
-            const tickers = (compact?.tickers || []).join(' · ');
+            const tickers = compact?.tickers || [];
             const headline = compact?.headline || '';
-            document.getElementById('aiTickers').textContent = tickers ? `[ ${tickers} ] ` : '';
-            document.getElementById('aiHeadline').textContent = headline;
+
+            const tickersContainer = document.getElementById('aiTickersContainer');
+            if (tickers.length > 0) {
+                tickersContainer.innerHTML = tickers.map(ticker => `<span class="ticker">${ticker}</span>`).join('');
+            } else {
+                tickersContainer.innerHTML = '';
+            }
+
+            document.getElementById('aiHeadline').textContent = headline || 'Monitoring for alpha signals...';
         });
 
         // Fetch and update rate limit information
@@ -444,9 +1224,11 @@
                 const response = await fetch('/api/rate-limits');
                 if (!response.ok) return;
                 const aiRes = await fetch('/api/ai/status');
-                
+                const aiUsageRes = await fetch('/api/ai/usage');
+
                 const data = await response.json();
                 const aiData = aiRes.ok ? await aiRes.json() : null;
+                const aiUsageData = aiUsageRes.ok ? await aiUsageRes.json() : null;
                 
                 // Update API usage in main stats
                 let maxUsage = 0;
@@ -459,36 +1241,23 @@
                 document.getElementById('apiUsage').textContent = `${maxUsage}%`;
                 document.getElementById('queueLength').textContent = totalQueue;
                 if (aiData) {
-                    const phaseText = `${aiData.phase}${aiData.running ? '…' : ''}`;
-                    const extra = aiData.idleReason ? ` (${aiData.idleReason})` : '';
-                    document.getElementById('aiPhase').textContent = phaseText + extra;
+                    updateAIStatus(aiData);
                 }
-                
-                // Update detailed rate limit info
-                const rateLimitDetails = document.getElementById('rateLimitDetails');
+
+                // Update minimal system status in top bar
                 if (Object.keys(data.endpoints || {}).length > 0) {
-                    document.getElementById('rateLimitInfo').style.display = 'block';
-                    
-                    let detailsHtml = `<div style="color: #0aa; margin-bottom: 10px;">Plan: ${data.plan.toUpperCase()}</div>`;
-                    
+                    let highestUsage = 0;
                     Object.entries(data.endpoints).forEach(([key, endpoint]) => {
-                        const color = endpoint.usagePercentage > 80 ? '#f00' : 
-                                    endpoint.usagePercentage > 60 ? '#fa0' : '#0f0';
-                        
-                        detailsHtml += `
-                            <div style="margin: 5px 0; color: ${color};">
-                                ${endpoint.endpoint}: ${endpoint.used}/${endpoint.limit} 
-                                (${endpoint.usagePercentage}%) 
-                                - Reset in ${Math.ceil(endpoint.timeUntilReset / 60000)}min
-                            </div>
-                        `;
+                        highestUsage = Math.max(highestUsage, endpoint.usagePercentage);
                     });
-                    
-                    if (totalQueue > 0) {
-                        detailsHtml += `<div style="color: #fa0; margin-top: 10px;">Queue: ${totalQueue} requests pending</div>`;
-                    }
-                    
-                    rateLimitDetails.innerHTML = detailsHtml;
+
+                    const color = highestUsage > 80 ? 'var(--red)' :
+                                highestUsage > 60 ? 'var(--orange)' : 'var(--text-subtle)';
+
+                    document.getElementById('planType').textContent = data.plan.toUpperCase();
+                    document.getElementById('usagePercent').textContent = `${highestUsage}%`;
+                    document.getElementById('usagePercent').style.color = color;
+                    document.getElementById('systemStatus').style.display = 'flex';
                 }
             } catch (error) {
                 console.error('Error fetching rate limit info:', error);
@@ -506,6 +1275,136 @@
         // Update rate limit info every 10 seconds
         setInterval(updateRateLimitInfo, 10000);
         updateRateLimitInfo(); // Initial load
+
+        // Webhook Configuration
+        let webhookConfig = {
+            url: '',
+            enabled: false,
+            notifications: {
+                allTweets: true,
+                aiInsights: false,
+                highEngagement: false
+            },
+            accounts: ['cz_binance', 'justinsuntron', 'CookerFlips', 'ShockedJS', 'LabsNoor', 'peacefuldecay']
+        };
+
+        function loadWebhookConfig() {
+            const saved = localStorage.getItem('webhookConfig');
+            if (saved) {
+                webhookConfig = { ...webhookConfig, ...JSON.parse(saved) };
+                updateWebhookUI();
+            }
+        }
+
+        function saveWebhookConfig() {
+            localStorage.setItem('webhookConfig', JSON.stringify(webhookConfig));
+            updateWebhookStatus();
+        }
+
+        function updateWebhookUI() {
+            document.getElementById('webhookUrl').value = webhookConfig.url || '';
+            document.getElementById('notify-all-tweets').checked = webhookConfig.notifications.allTweets;
+            document.getElementById('notify-ai-insights').checked = webhookConfig.notifications.aiInsights;
+            document.getElementById('notify-high-engagement').checked = webhookConfig.notifications.highEngagement;
+
+            // Update account checkboxes
+            webhookConfig.accounts.forEach(account => {
+                const checkbox = document.getElementById(`webhook-${account}`);
+                if (checkbox) checkbox.checked = true;
+            });
+        }
+
+        function updateWebhookStatus() {
+            const statusEl = document.getElementById('webhookStatus');
+            if (webhookConfig.url && webhookConfig.enabled) {
+                statusEl.textContent = 'Active';
+                statusEl.style.color = 'var(--green)';
+            } else if (webhookConfig.url) {
+                statusEl.textContent = 'Configured';
+                statusEl.style.color = 'var(--orange)';
+            } else {
+                statusEl.textContent = 'Not configured';
+                statusEl.style.color = 'var(--text-dim)';
+            }
+        }
+
+        async function testWebhook() {
+            const url = document.getElementById('webhookUrl').value;
+            if (!url) {
+                alert('Please enter a webhook URL first');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/webhook/test', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url })
+                });
+
+                if (response.ok) {
+                    alert('Test message sent successfully!');
+                } else {
+                    alert('Failed to send test message');
+                }
+            } catch (error) {
+                alert('Error testing webhook: ' + error.message);
+            }
+        }
+
+        async function saveWebhook() {
+            const url = document.getElementById('webhookUrl').value;
+            if (!url) {
+                alert('Please enter a webhook URL');
+                return;
+            }
+
+            // Update config from form
+            webhookConfig.url = url;
+            webhookConfig.enabled = true;
+            webhookConfig.notifications.allTweets = document.getElementById('notify-all-tweets').checked;
+            webhookConfig.notifications.aiInsights = document.getElementById('notify-ai-insights').checked;
+            webhookConfig.notifications.highEngagement = document.getElementById('notify-high-engagement').checked;
+
+            // Update accounts
+            webhookConfig.accounts = [];
+            document.querySelectorAll('#webhookAccounts input[type="checkbox"]:checked').forEach(checkbox => {
+                const account = checkbox.id.replace('webhook-', '');
+                webhookConfig.accounts.push(account);
+            });
+
+            try {
+                const response = await fetch('/api/webhook/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(webhookConfig)
+                });
+
+                if (response.ok) {
+                    saveWebhookConfig();
+                    alert('Webhook configuration saved!');
+                } else {
+                    alert('Failed to save webhook configuration');
+                }
+            } catch (error) {
+                alert('Error saving webhook: ' + error.message);
+            }
+        }
+
+        // Event listeners
+        document.getElementById('webhookToggle').addEventListener('click', () => {
+            const config = document.getElementById('webhookConfig');
+            const btn = document.getElementById('webhookToggle');
+            const isHidden = config.style.display === 'none';
+            config.style.display = isHidden ? 'block' : 'none';
+            btn.textContent = isHidden ? 'Hide' : 'Configure';
+        });
+
+        document.getElementById('testWebhook').addEventListener('click', testWebhook);
+        document.getElementById('saveWebhook').addEventListener('click', saveWebhook);
+
+        // Load webhook config on page load
+        loadWebhookConfig();
     </script>
 </body>
 </html>

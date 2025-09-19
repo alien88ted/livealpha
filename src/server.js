@@ -41,6 +41,9 @@ class AlphaTrackerServer {
         
         // Make tracker available to routes
         this.app.set('tracker', this.tracker);
+
+        // Connect notifier to tracker
+        this.tracker.notifier = this.notifier;
         
         // Request logging middleware
         this.app.use((req, res, next) => {
