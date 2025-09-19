@@ -7,6 +7,7 @@ const TrackerService = require('./services/trackerService');
 const apiRoutes = require('./routes/api');
 const NotifierService = require('./services/notifierService');
 const AIService = require('./services/aiService');
+const PriceService = require('./services/priceService');
 const { getPool } = require('./config/database');
 require('dotenv').config();
 
@@ -23,6 +24,7 @@ class AlphaTrackerServer {
         this.tracker = new TrackerService();
 		this.notifier = new NotifierService();
 		this.ai = new AIService();
+		this.priceService = new PriceService();
         this.connectedClients = 0;
         
         this.setupMiddleware();
@@ -41,6 +43,8 @@ class AlphaTrackerServer {
         
         // Make tracker available to routes
         this.app.set('tracker', this.tracker);
+        this.app.set('ai', this.ai);
+        this.app.set('priceService', this.priceService);
 
         // Connect notifier to tracker
         this.tracker.notifier = this.notifier;
@@ -167,6 +171,12 @@ class AlphaTrackerServer {
 				if (result.content) {
 					let compact = { tickers: [], headline: '' };
 					try { compact = await this.ai.compactFromContent(result.content); } catch {}
+
+					// Update prices for AI-suggested tickers
+					if (compact.tickers && compact.tickers.length > 0) {
+						this.priceService.updateAISuggestedPrices(compact.tickers).catch(() => {});
+					}
+
 					this.io.emit('aiInsights', { content: result.content, compact, cached: !!result.cached });
 					// Ask Sonnet if TG notification should be sent based on history
 					this.ai.maybeTelegramNotifyFromSummary(result.content).catch(() => {});

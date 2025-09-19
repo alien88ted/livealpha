@@ -265,6 +265,34 @@
             font-size: 12px;
             font-weight: 600;
             font-family: "SF Mono", Monaco, monospace;
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .ticker-price {
+            font-size: 10px;
+            font-weight: 500;
+            color: var(--text-dim);
+        }
+
+        .ticker-change {
+            font-size: 9px;
+            font-weight: 500;
+        }
+
+        .ticker-change.positive {
+            color: var(--green);
+        }
+
+        .ticker-change.negative {
+            color: var(--red);
+        }
+
+        .price-loading {
+            opacity: 0.6;
+            animation: fade 1.5s infinite;
         }
 
         .headline {
@@ -678,6 +706,9 @@
                     <span>Sonnet</span>
                     <span class="ai-timestamp" id="sonnetTimestamp">Never run</span>
                 </div>
+                <div style="margin-left: auto; font-size: 11px; color: var(--text-subtle);">
+                    Daily: $<span id="aiDailyCost">0.00</span> / $<span id="aiDailyBudget">10.00</span>
+                </div>
             </div>
 
             <div id="aiCompact">
@@ -833,6 +864,7 @@
         let allTweets = [];
         let accounts = new Set();
         let enabledAccounts = new Set(['cz_binance', 'justinsuntron', 'CookerFlips', 'ShockedJS', 'LabsNoor', 'peacefuldecay', '0xpeely', 'km_trades', 'astaso1', 'eyearea', 'trading_axe', 'OwariETH', 'issathecooker', 'alien88ted']);
+        let priceCache = {};
 
         function parseDateUtc(value) {
             if (!value) return new Date();
@@ -917,6 +949,16 @@
             updateModelStatus('sonnet', aiData.lastSonnetAt, phase === 'sonnet' && isRunning);
         }
 
+        async function updateAIUsageMetrics(aiUsageData) {
+            if (aiUsageData && aiUsageData.current && aiUsageData.current.daily) {
+                const dailySpend = aiUsageData.current.daily.totalSpend || 0;
+                const dailyBudget = aiUsageData.current.daily.totalBudget || 10;
+
+                document.getElementById('aiDailyCost').textContent = dailySpend.toFixed(2);
+                document.getElementById('aiDailyBudget').textContent = dailyBudget.toFixed(2);
+            }
+        }
+
         function updateModelStatus(model, lastRun, isCurrentlyRunning) {
             const indicator = document.getElementById(`${model}Indicator`);
             const timestamp = document.getElementById(`${model}Timestamp`);
@@ -969,6 +1011,55 @@
             if (diffHours < 24) return `${diffHours}h ago`;
             if (diffDays < 7) return `${diffDays}d ago`;
             return date.toLocaleDateString();
+        }
+
+        // Price fetching and display functions
+        async function fetchPrices(tickers) {
+            try {
+                const response = await fetch(`/api/prices?tickers=${tickers.join(',')}`);
+                if (response.ok) {
+                    const data = await response.json();
+                    Object.assign(priceCache, data.prices);
+                    return data.prices;
+                }
+            } catch (error) {
+                console.error('Error fetching prices:', error);
+            }
+            return {};
+        }
+
+        function renderTickerWithPrice(ticker) {
+            const symbol = ticker.replace('$', '').toUpperCase();
+            const priceData = priceCache[symbol];
+
+            if (!priceData) {
+                return `<span class="ticker price-loading">
+                    ${ticker}
+                    <span class="ticker-price">...</span>
+                </span>`;
+            }
+
+            const changeClass = priceData.change24h >= 0 ? 'positive' : 'negative';
+
+            return `<span class="ticker">
+                ${ticker}
+                <span class="ticker-price">${priceData.formattedPrice}</span>
+                <span class="ticker-change ${changeClass}">${priceData.formattedChange}</span>
+            </span>`;
+        }
+
+        async function updateTickerPrices(tickers) {
+            if (!tickers || tickers.length === 0) return;
+
+            // Fetch prices for new tickers
+            const newTickers = tickers.filter(t => {
+                const symbol = t.replace('$', '').toUpperCase();
+                return !priceCache[symbol];
+            });
+
+            if (newTickers.length > 0) {
+                await fetchPrices(newTickers);
+            }
         }
 
         function compactFallbackFromContent(content) {
@@ -1338,18 +1429,21 @@
             updateStats();
         });
 
-        socket.on('aiInsights', (payload) => {
+        socket.on('aiInsights', async (payload) => {
             const content = payload?.content || '';
             document.getElementById('aiInsights').textContent = content || 'No analysis available yet';
             const compact = payload?.compact || compactFallbackFromContent(content);
             const tickers = compact?.tickers || [];
             const headline = compact?.headline || '';
 
-            const tickersContainer = document.getElementById('aiTickersContainer');
+            // Update prices for tickers and display them
             if (tickers.length > 0) {
-                tickersContainer.innerHTML = tickers.map(ticker => `<span class="ticker">${ticker}</span>`).join('');
+                await updateTickerPrices(tickers);
+
+                const tickersContainer = document.getElementById('aiTickersContainer');
+                tickersContainer.innerHTML = tickers.map(ticker => renderTickerWithPrice(ticker)).join('');
             } else {
-                tickersContainer.innerHTML = '';
+                document.getElementById('aiTickersContainer').innerHTML = '';
             }
 
             document.getElementById('aiHeadline').textContent = headline || 'Monitoring for alpha signals...';
@@ -1379,6 +1473,11 @@
                 document.getElementById('queueLength').textContent = totalQueue;
                 if (aiData) {
                     updateAIStatus(aiData);
+                }
+
+                // Update AI usage metrics
+                if (aiUsageData) {
+                    updateAIUsageMetrics(aiUsageData);
                 }
 
                 // Update minimal system status in top bar
@@ -1412,6 +1511,23 @@
         // Update rate limit info every 10 seconds
         setInterval(updateRateLimitInfo, 10000);
         updateRateLimitInfo(); // Initial load
+
+        // Refresh prices for displayed tickers every 2 minutes
+        setInterval(async () => {
+            const tickersContainer = document.getElementById('aiTickersContainer');
+            if (tickersContainer && tickersContainer.children.length > 0) {
+                const displayedTickers = Array.from(tickersContainer.children)
+                    .map(el => el.textContent.split(' ')[0]) // Get just the ticker symbol
+                    .filter(t => t.startsWith('$'));
+
+                if (displayedTickers.length > 0) {
+                    const refreshedPrices = await fetchPrices(displayedTickers);
+                    if (Object.keys(refreshedPrices).length > 0) {
+                        tickersContainer.innerHTML = displayedTickers.map(ticker => renderTickerWithPrice(ticker)).join('');
+                    }
+                }
+            }
+        }, 120000); // 2 minutes
 
         // Webhook Configuration
         let webhookConfig = {

@@ -157,9 +157,8 @@ router.get('/rate-limits', async (req, res) => {
 // AI status
 router.get('/ai/status', async (req, res) => {
     try {
-        const tracker = req.app.get('tracker');
-        if (!tracker) return res.status(500).json({ error: 'Tracker service not available' });
-        const ai = tracker?.ai || new AIService();
+        // Get AI service from app (server has the AI instance)
+        const ai = req.app.get('ai') || new AIService();
         const status = await ai.getStatus();
         res.json(status);
     } catch (error) {
@@ -306,32 +305,44 @@ router.get('/ai/usage', async (req, res) => {
         const ai = new AIService();
         const usageStats = ai.getUsageStats();
 
-        // Get historical usage from database
-        const pool = getPool();
-        const [hourlyUsage] = await pool.execute(
-            `SELECT
-                DATE_FORMAT(created_at, '%Y-%m-%d %H:00:00') as hour,
-                COUNT(*) as requests,
-                SUM(input_tokens + output_tokens) as tokens,
-                SUM(cost_usd) as cost,
-                AVG(execution_time_ms) as avg_latency
-             FROM ai_usage_log
-             WHERE created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
-             GROUP BY hour
-             ORDER BY hour DESC`
-        );
+        // Get historical usage from database (gracefully handle missing table)
+        let hourlyUsage = [];
+        let modelBreakdown = [];
 
-        const [modelBreakdown] = await pool.execute(
-            `SELECT
-                model,
-                COUNT(*) as requests,
-                SUM(input_tokens + output_tokens) as tokens,
-                SUM(cost_usd) as cost,
-                AVG(execution_time_ms) as avg_latency
-             FROM ai_usage_log
-             WHERE created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
-             GROUP BY model`
-        );
+        try {
+            const pool = getPool();
+            const [hourlyResult] = await pool.execute(
+                `SELECT
+                    DATE_FORMAT(created_at, '%Y-%m-%d %H:00:00') as hour,
+                    COUNT(*) as requests,
+                    SUM(input_tokens + output_tokens) as tokens,
+                    SUM(cost_usd) as cost,
+                    AVG(execution_time_ms) as avg_latency
+                 FROM ai_usage_log
+                 WHERE created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
+                 GROUP BY hour
+                 ORDER BY hour DESC`
+            );
+            hourlyUsage = hourlyResult;
+
+            const [modelResult] = await pool.execute(
+                `SELECT
+                    model,
+                    COUNT(*) as requests,
+                    SUM(input_tokens + output_tokens) as tokens,
+                    SUM(cost_usd) as cost,
+                    AVG(execution_time_ms) as avg_latency
+                 FROM ai_usage_log
+                 WHERE created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
+                 GROUP BY model`
+            );
+            modelBreakdown = modelResult;
+        } catch (dbError) {
+            if (!dbError.message.includes("doesn't exist")) {
+                console.error('❌ Database error fetching AI usage history:', dbError.message);
+            }
+            // Continue with empty arrays if table doesn't exist
+        }
 
         res.json({
             current: usageStats,
@@ -626,6 +637,83 @@ async function sendDiscordNotification(type, data, clientId = 'default') {
         return false;
     }
 }
+
+/**
+ * Get current prices for tickers
+ */
+router.get('/prices', async (req, res) => {
+    try {
+        const priceService = req.app.get('priceService');
+        if (!priceService) {
+            return res.status(500).json({ error: 'Price service not available' });
+        }
+
+        const { tickers } = req.query;
+
+        if (tickers) {
+            // Get specific tickers
+            const tickerList = tickers.split(',').map(t => t.trim());
+            const prices = {};
+
+            for (const ticker of tickerList) {
+                const price = priceService.getPrice(ticker);
+                if (price) {
+                    prices[ticker.replace('$', '').toUpperCase()] = price;
+                }
+            }
+
+            res.json({ prices });
+        } else {
+            // Get all cached prices
+            const allPrices = priceService.getAllPrices();
+            res.json({ prices: allPrices });
+        }
+    } catch (error) {
+        console.error('❌ Error fetching prices:', error.message);
+        res.status(500).json({ error: 'Failed to fetch prices' });
+    }
+});
+
+/**
+ * Get price service status
+ */
+router.get('/prices/status', async (req, res) => {
+    try {
+        const priceService = req.app.get('priceService');
+        if (!priceService) {
+            return res.status(500).json({ error: 'Price service not available' });
+        }
+
+        const status = priceService.getStatus();
+        res.json(status);
+    } catch (error) {
+        console.error('❌ Error fetching price status:', error.message);
+        res.status(500).json({ error: 'Failed to fetch price status' });
+    }
+});
+
+/**
+ * Force update prices for specific tickers
+ */
+router.post('/prices/update', async (req, res) => {
+    try {
+        const priceService = req.app.get('priceService');
+        if (!priceService) {
+            return res.status(500).json({ error: 'Price service not available' });
+        }
+
+        const { tickers } = req.body;
+        if (!tickers || !Array.isArray(tickers)) {
+            return res.status(400).json({ error: 'Tickers array required' });
+        }
+
+        await priceService.updatePrices(tickers);
+        res.json({ success: true, message: `Updated prices for ${tickers.length} tickers` });
+    } catch (error) {
+        console.error('❌ Error updating prices:', error.message);
+        res.status(500).json({ error: 'Failed to update prices' });
+    }
+});
 
 // Export webhook function for use by other services
 router.sendDiscordNotification = sendDiscordNotification;

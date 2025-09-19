@@ -150,6 +150,23 @@ async function createTables() {
 			)
 		`);
 
+		// Create AI usage tracking table
+		await pool.execute(`
+			CREATE TABLE IF NOT EXISTS ai_usage_log (
+				id BIGINT AUTO_INCREMENT PRIMARY KEY,
+				model VARCHAR(50) NOT NULL,
+				input_tokens INT DEFAULT 0,
+				output_tokens INT DEFAULT 0,
+				cost_usd DECIMAL(10,4) DEFAULT 0,
+				execution_time_ms INT DEFAULT 0,
+				operation_type VARCHAR(50) DEFAULT 'analysis',
+				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+				INDEX idx_created_at (created_at),
+				INDEX idx_model (model),
+				INDEX idx_operation_type (operation_type)
+			)
+		`);
+
 		// Create tracked accounts table (dynamic monitored accounts)
 		await pool.execute(`
 			CREATE TABLE IF NOT EXISTS tracked_accounts (

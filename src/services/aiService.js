@@ -10,11 +10,25 @@ class AIService {
 		this.opusModel = process.env.AI_OPUS_MODEL || 'claude-opus-4-1-20250805';
 		this.sonnetModel = process.env.AI_SONNET_MODEL || 'claude-sonnet-4-20250514';
 		this.haikuMaxTokens = 2048;
-		this.opusMaxTokens = 4000;
+		this.opusMaxTokens = 3000; // Reduced from 4000
 		this.sonnetMaxTokens = 20000;
 		this.temperature = 0.3;
 		this.digestIntervalMs = 60 * 60 * 1000; // 1h
 		this.urgentCooldownMs = 5 * 60 * 1000; // 5 minutes cooldown for haiku flash
+
+		// AI Budget Management - Target $300/month total
+		this.dailyBudgets = {
+			opus: 3.33,    // $100/month for critical analysis only
+			sonnet: 5.00,  // $150/month for main analysis
+			haiku: 1.67    // $50/month for quick decisions
+		};
+		this.dailySpend = { opus: 0, sonnet: 0, haiku: 0 };
+
+		// Model selection thresholds
+		this.opusMinIntervalMs = 30 * 60 * 1000; // 30 minutes minimum between Opus calls
+		this.sonnetMinIntervalMs = 8 * 60 * 1000; // 8 minutes between Sonnet calls
+		this.opusMinTweetThreshold = 8; // Need 8+ new tweets for Opus
+		this.sonnetMinTweetThreshold = 3; // Need 3+ new tweets for Sonnet
 
 		// AI Usage Tracking
 		this.usage = {
@@ -129,6 +143,15 @@ class AIService {
 			const modelCosts = this.costs[model] || { input: 0.003, output: 0.015 };
 			const cost = (inputTokens * modelCosts.input + outputTokens * modelCosts.output) / 1000;
 
+			// Track spending by model for budget control
+			if (model.includes('opus')) {
+				this.dailySpend.opus += cost;
+			} else if (model.includes('sonnet')) {
+				this.dailySpend.sonnet += cost;
+			} else if (model.includes('haiku')) {
+				this.dailySpend.haiku += cost;
+			}
+
 			// Update session usage
 			this.usage.session.requests++;
 			this.usage.session.tokens += (inputTokens + outputTokens);
@@ -141,13 +164,20 @@ class AIService {
 			this.usage.monthly[modelType]++;
 			this.usage.monthly.cost += cost;
 
-			// Store in database
-			const pool = getPool();
-			await pool.execute(
-				`INSERT INTO ai_usage_log (model, input_tokens, output_tokens, cost_usd, execution_time_ms, operation_type)
-				 VALUES (?, ?, ?, ?, ?, ?)`,
-				[model, inputTokens, outputTokens, cost, executionTime, 'analysis']
-			);
+			// Store in database (gracefully handle missing table)
+			try {
+				const pool = getPool();
+				await pool.execute(
+					`INSERT INTO ai_usage_log (model, input_tokens, output_tokens, cost_usd, execution_time_ms, operation_type)
+					 VALUES (?, ?, ?, ?, ?, ?)`,
+					[model, inputTokens, outputTokens, cost, executionTime, 'analysis']
+				);
+			} catch (dbError) {
+				// Table might not exist yet - just log the error but don't fail
+				if (!dbError.message.includes("doesn't exist")) {
+					console.error('❌ Database error tracking AI usage:', dbError.message);
+				}
+			}
 
 			this.logEvent('usage_tracked', { model, inputTokens, outputTokens, cost, executionTime });
 		} catch (error) {
@@ -155,9 +185,55 @@ class AIService {
 		}
 	}
 
+	/**
+	 * Smart model selection based on context and budget
+	 */
+	selectOptimalModel(tweets, urgency = 'normal') {
+		const newTweetCount = tweets.filter(t => {
+			const tweetAge = Date.now() - new Date(t.created_at).getTime();
+			return tweetAge < 10 * 60 * 1000; // Last 10 minutes
+		}).length;
+
+		const timeSinceLastOpus = Date.now() - (this.state.lastOpusAt || 0);
+		const timeSinceLastSonnet = Date.now() - (this.state.lastSonnetAt || 0);
+
+		// Check budget constraints
+		const opusBudgetOk = this.dailySpend.opus < this.dailyBudgets.opus;
+		const sonnetBudgetOk = this.dailySpend.sonnet < this.dailyBudgets.sonnet;
+
+		// Opus: Only for major market events with high tweet volume
+		if (urgency === 'critical' ||
+			(newTweetCount >= this.opusMinTweetThreshold &&
+			 timeSinceLastOpus >= this.opusMinIntervalMs &&
+			 opusBudgetOk)) {
+			return { model: this.opusModel, maxTokens: this.opusMaxTokens, type: 'opus' };
+		}
+
+		// Sonnet: Main workhorse for regular analysis
+		if (newTweetCount >= this.sonnetMinTweetThreshold &&
+			timeSinceLastSonnet >= this.sonnetMinIntervalMs &&
+			sonnetBudgetOk) {
+			return { model: this.sonnetModel, maxTokens: this.sonnetMaxTokens, type: 'sonnet' };
+		}
+
+		// Haiku: Quick decisions and filtering
+		return { model: this.haikuModel, maxTokens: this.haikuMaxTokens, type: 'haiku' };
+	}
+
+	/**
+	 * Check if we can afford a model call
+	 */
+	canAffordModelCall(modelType, estimatedCost = 1.0) {
+		const budget = this.dailyBudgets[modelType];
+		const spent = this.dailySpend[modelType];
+		return (spent + estimatedCost) <= budget;
+	}
+
 	getUsageStats() {
 		const sessionDuration = (Date.now() - this.usage.session.startTime) / 1000 / 60; // minutes
-		const budgetUsed = (this.usage.monthly.cost / this.monthlyBudget) * 100;
+		const totalDailyBudget = Object.values(this.dailyBudgets).reduce((a, b) => a + b, 0);
+		const totalDailySpend = Object.values(this.dailySpend).reduce((a, b) => a + b, 0);
+		const budgetUsed = (totalDailySpend / totalDailyBudget) * 100;
 
 		return {
 			session: {
@@ -165,7 +241,13 @@ class AIService {
 				duration: Math.round(sessionDuration),
 				avgCostPerRequest: this.usage.session.requests > 0 ? this.usage.session.cost / this.usage.session.requests : 0
 			},
-			daily: this.usage.daily,
+			daily: {
+				...this.usage.daily,
+				spend: this.dailySpend,
+				budgets: this.dailyBudgets,
+				totalSpend: totalDailySpend,
+				totalBudget: totalDailyBudget
+			},
 			monthly: {
 				...this.usage.monthly,
 				budget: this.monthlyBudget,
@@ -328,9 +410,19 @@ class AIService {
 	async getStatus() {
 		const notifyState = await this.getNotifyState();
 		const latest = await this.getLatestInsightRow();
-		// recent history count (24h)
-		const pool = getPool();
-		const [cnt] = await pool.execute(`SELECT COUNT(*) as c FROM ai_notify_history WHERE created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)`);
+
+		// recent history count (24h) - gracefully handle missing table
+		let recentAlerts24h = 0;
+		try {
+			const pool = getPool();
+			const [cnt] = await pool.execute(`SELECT COUNT(*) as c FROM ai_notify_history WHERE created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)`);
+			recentAlerts24h = (cnt && cnt[0] && cnt[0].c) || 0;
+		} catch (error) {
+			if (!error.message.includes("doesn't exist")) {
+				console.error('❌ Error getting recent alerts count:', error.message);
+			}
+		}
+
 		const now = Date.now();
 		const lastDigestMs = notifyState.last_digest_at ? new Date(notifyState.last_digest_at).getTime() : 0;
 		const nextDigestMs = Math.max(0, (lastDigestMs ? lastDigestMs + this.digestIntervalMs : 0) - now);
@@ -347,15 +439,16 @@ class AIService {
 			phase: this.state.phase,
 			running: this.state.running,
 			lastInsightAt: latest?.created_at || this.state.lastInsightAt,
+			lastOpusAt: this.state.lastOpusAt,
 			lastDigestAt: notifyState.last_digest_at || this.state.lastDigestAt,
 			lastUrgentAt: notifyState.last_urgent_at || this.state.lastUrgentAt,
 			lastHaikuFlashAt: this.state.lastHaikuFlashAt,
 			lastSonnetAt: this.state.lastSonnetAt,
-			recentAlerts24h: (cnt && cnt[0] && cnt[0].c) || 0,
+			lastHaikuDecisionAt: this.state.lastHaikuDecisionAt,
+			recentAlerts24h,
 			enabled,
 			nextDigestMs,
 			urgentCooldownRemainingMs,
-			lastHaikuDecisionAt: this.state.lastHaikuDecisionAt,
 			lastHaikuUrgent: this.state.lastHaikuUrgent,
 			lastHaikuChange: this.state.lastHaikuChange,
 			idleReason
