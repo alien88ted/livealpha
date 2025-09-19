@@ -13,7 +13,7 @@ class TrackerService {
         this.syncPromise = null; // share in-flight sync among callers
         
 		// Default accounts configuration
-		this.DEFAULT_ACCOUNTS = ['cz_binance', 'CookerFlips', 'ShockedJS', 'LabsNoor', '0xpeely', 'km_trades', 'astaso1', 'eyearea', 'trading_axe', 'OwariETH', 'issathecooker'];
+		this.DEFAULT_ACCOUNTS = ['cz_binance', 'CookerFlips', 'ShockedJS', 'LabsNoor', '0xpeely', 'km_trades', 'astaso1', 'eyearea', 'trading_axe', 'OwariETH', 'issathecooker', 'mmissoralways'];
         this.TEST_ACCOUNTS = ['alien88ted'];
 		this.dynamicAccounts = new Set(); // from DB tracked_accounts
     }

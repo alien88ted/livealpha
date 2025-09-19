@@ -1,11 +1,15 @@
 const express = require('express');
 const { getPool } = require('../config/database');
 const AIService = require('../services/aiService');
+const CryptoDataService = require('../services/cryptoDataService');
 
 const router = express.Router();
 
 // In-memory webhook config storage (could be moved to database later)
 let webhookConfigs = new Map();
+
+// Initialize crypto data service
+const cryptoService = new CryptoDataService();
 
 /**
  * Get fresh live tweets from Twitter API
@@ -252,6 +256,22 @@ router.post('/ai/refresh', async (req, res) => {
     } catch (error) {
         console.error('❌ Error refreshing AI insight:', error.message);
         res.status(500).json({ error: 'Failed to refresh AI insights' });
+    }
+});
+
+// AI: Get past Opus analyses for tracking
+router.get('/ai/opus/history', async (req, res) => {
+    try {
+        const limit = parseInt(req.query.limit) || 10;
+        const ai = new AIService();
+        const pastAnalyses = await ai.getPastOpusAnalyses(limit);
+        res.json({
+            count: pastAnalyses.length,
+            analyses: pastAnalyses
+        });
+    } catch (error) {
+        console.error('❌ Error fetching past Opus analyses:', error.message);
+        res.status(500).json({ error: 'Failed to fetch past Opus analyses' });
     }
 });
 
@@ -712,6 +732,120 @@ router.post('/prices/update', async (req, res) => {
     } catch (error) {
         console.error('❌ Error updating prices:', error.message);
         res.status(500).json({ error: 'Failed to update prices' });
+    }
+});
+
+/**
+ * Crypto Data Endpoints
+ */
+
+// Search for tokens by symbol or name
+router.get('/crypto/search/:query', async (req, res) => {
+    try {
+        const { query } = req.params;
+        const tokens = await cryptoService.searchTokens(query);
+        
+        res.json({
+            query,
+            results: tokens.slice(0, 50), // Limit results
+            total_found: tokens.length
+        });
+    } catch (error) {
+        console.error('❌ Error searching tokens:', error.message);
+        res.status(500).json({ error: 'Failed to search tokens' });
+    }
+});
+
+// Get token price by symbol
+router.get('/crypto/price/:symbol', async (req, res) => {
+    try {
+        const { symbol } = req.params;
+        const token = await cryptoService.findToken(symbol);
+        
+        if (!token) {
+            return res.status(404).json({ error: `Token not found: ${symbol}` });
+        }
+        
+        const priceData = await cryptoService.getTokenPrice(token.id);
+        
+        res.json({
+            symbol: token.symbol,
+            name: token.name,
+            id: token.id,
+            price_data: priceData,
+            market_cap_rank: token.market_cap_rank,
+            platforms: token.platforms
+        });
+    } catch (error) {
+        console.error('❌ Error fetching token price:', error.message);
+        res.status(500).json({ error: 'Failed to fetch token price' });
+    }
+});
+
+// Get batch prices for multiple tokens
+router.post('/crypto/prices', async (req, res) => {
+    try {
+        const { symbols } = req.body;
+        
+        if (!symbols || !Array.isArray(symbols)) {
+            return res.status(400).json({ error: 'Symbols array required' });
+        }
+        
+        const prices = await cryptoService.getBatchPrices(symbols);
+        
+        res.json({
+            requested: symbols,
+            found: Object.keys(prices).length,
+            prices
+        });
+    } catch (error) {
+        console.error('❌ Error fetching batch prices:', error.message);
+        res.status(500).json({ error: 'Failed to fetch batch prices' });
+    }
+});
+
+// Get trending tokens
+router.get('/crypto/trending', async (req, res) => {
+    try {
+        const trending = await cryptoService.getTrendingTokens();
+        res.json(trending);
+    } catch (error) {
+        console.error('❌ Error fetching trending tokens:', error.message);
+        res.status(500).json({ error: 'Failed to fetch trending tokens' });
+    }
+});
+
+// Get crypto database stats
+router.get('/crypto/stats', async (req, res) => {
+    try {
+        const stats = cryptoService.getStats();
+        const globalStats = await cryptoService.getGlobalStats();
+        
+        res.json({
+            database: stats,
+            global_market: globalStats
+        });
+    } catch (error) {
+        console.error('❌ Error fetching crypto stats:', error.message);
+        res.status(500).json({ error: 'Failed to fetch crypto stats' });
+    }
+});
+
+// Force update crypto database
+router.post('/crypto/update', async (req, res) => {
+    try {
+        console.log('🔄 Manual crypto database update triggered');
+        const tokens = await cryptoService.updateTokenDatabase();
+        
+        res.json({
+            success: true,
+            message: 'Database updated successfully',
+            token_count: tokens.length,
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        console.error('❌ Error updating crypto database:', error.message);
+        res.status(500).json({ error: 'Failed to update crypto database' });
     }
 });
 

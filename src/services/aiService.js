@@ -14,7 +14,12 @@ class AIService {
 		this.sonnetMaxTokens = 20000;
 		this.temperature = 0.3;
 		this.digestIntervalMs = 60 * 60 * 1000; // 1h
-		this.urgentCooldownMs = 5 * 60 * 1000; // 5 minutes cooldown for haiku flash
+		this.urgentCooldownMs = 15 * 60 * 1000; // 15 minutes cooldown for urgent alerts (was 5min)
+
+		// Alert deduplication settings
+		this.recentAlerts = new Map(); // message hash -> timestamp
+		this.alertSimilarityThreshold = 0.8; // 80% similarity = duplicate
+		this.maxAlertsPerHour = 4; // Maximum urgent alerts per hour
 
 		// AI Budget Management - Target $300/month total
 		this.dailyBudgets = {
@@ -107,6 +112,87 @@ class AIService {
 			`SELECT content, created_at, checksum, model FROM ai_insights ORDER BY created_at DESC LIMIT 1`
 		);
 		return rows.length ? rows[0] : null;
+	}
+
+	/**
+	 * Get past Opus analyses for context and tracking
+	 */
+	async getPastOpusAnalyses(limit = 10) {
+		try {
+			const pool = getPool();
+			const [rows] = await pool.execute(
+				`SELECT content, created_at, checksum, model
+				 FROM ai_insights
+				 WHERE model LIKE '%opus%'
+				 ORDER BY created_at DESC
+				 LIMIT ?`,
+				[limit]
+			);
+			return rows.map(row => ({
+				...row,
+				summary: this.extractOpusSummary(row.content),
+				timeAgo: this.timeAgo(row.created_at)
+			}));
+		} catch (error) {
+			console.error('❌ Error fetching past Opus analyses:', error.message);
+			return [];
+		}
+	}
+
+	/**
+	 * Extract key points from Opus analysis for display
+	 */
+	extractOpusSummary(content) {
+		if (!content) return 'No content';
+
+		const lines = content.split('\n').map(l => l.trim()).filter(Boolean);
+
+		// Extract Hot now section
+		const hotIdx = lines.findIndex(l => l.toLowerCase().includes('hot now'));
+		const emergingIdx = lines.findIndex(l => l.toLowerCase().includes('emerging'));
+		const aiPickIdx = lines.findIndex(l => l.toLowerCase().includes('ai pick'));
+
+		let summary = '';
+
+		if (hotIdx !== -1) {
+			const hotSection = lines.slice(hotIdx + 1, emergingIdx > hotIdx ? emergingIdx : hotIdx + 4)
+				.filter(l => l && !l.startsWith('**'))
+				.slice(0, 2)
+				.join('. ');
+			summary += `Hot: ${hotSection}`;
+		}
+
+		if (aiPickIdx !== -1) {
+			const aiPick = lines.slice(aiPickIdx + 1, aiPickIdx + 3)
+				.filter(l => l && !l.startsWith('**'))
+				.join('. ');
+			if (aiPick) summary += ` | AI Pick: ${aiPick}`;
+		}
+
+		// Extract tickers
+		const tickers = (content.match(/\$[A-Z]{2,10}/g) || []).slice(0, 5);
+		if (tickers.length > 0) {
+			summary = `${tickers.join(' ')} - ${summary}`;
+		}
+
+		return summary.slice(0, 200) + (summary.length > 200 ? '...' : '');
+	}
+
+	/**
+	 * Format time ago helper
+	 */
+	timeAgo(timestamp) {
+		const now = new Date();
+		const time = new Date(timestamp);
+		const diffMs = now - time;
+		const diffMins = Math.floor(diffMs / (1000 * 60));
+		const diffHours = Math.floor(diffMins / 60);
+		const diffDays = Math.floor(diffHours / 24);
+
+		if (diffMins < 60) return `${diffMins}m ago`;
+		if (diffHours < 24) return `${diffHours}h ago`;
+		if (diffDays < 7) return `${diffDays}d ago`;
+		return time.toLocaleDateString();
 	}
 
 	async saveInsight(checksum, model, content) {
@@ -375,7 +461,7 @@ class AIService {
 		this.logEvent('digest_sent', { checksum });
 	}
 
-	// Fast-path urgent alert using Haiku while Opus processes
+	// Fast-path urgent alert using Haiku while Opus processes (with deduplication)
 	async maybeSendHaikuFlash(tweets) {
 		this.state.phase = 'haiku_flash_check';
 		this.logEvent('haiku_check_start');
@@ -388,12 +474,31 @@ class AIService {
 
 		const state = await this.getNotifyState();
 		const last = state.last_urgent_at ? new Date(state.last_urgent_at).getTime() : 0;
-		if (state.last_urgent_checksum === checksum && Date.now() - last < this.urgentCooldownMs) return;
+
+		// Enhanced cooldown: check both time and content similarity
+		if (Date.now() - last < this.urgentCooldownMs) {
+			this.logEvent('urgent_skipped_cooldown', { remainingMs: this.urgentCooldownMs - (Date.now() - last) });
+			return;
+		}
+
+		// Check recent alerts for similarity (last hour)
+		const alertsInLastHour = await this.getRecentAlerts(60 * 60 * 1000);
+		if (alertsInLastHour.length >= this.maxAlertsPerHour) {
+			this.logEvent('urgent_skipped_rate_limit', { alertsInLastHour: alertsInLastHour.length });
+			return;
+		}
 
 		const prompt = `Write ONE urgent Telegram alert line (<= 180 chars). Start with URGENT:. Include 1-3 top $TICKERS. Focus on the new/time-sensitive change. No hashtags, no markdown.\n\n<tweets>\n${text}\n</tweets>`;
 		let message = '';
 		try { message = (await this.runModel(this.haikuModel, 256, prompt)).trim().replace(/\n+/g,' '); } catch {}
 		if (!message) return;
+
+		// Check if this message is too similar to recent alerts
+		const similarity = await this.calculateMessageSimilarity(message, alertsInLastHour.map(a => a.message));
+		if (similarity > this.alertSimilarityThreshold) {
+			this.logEvent('urgent_skipped_similarity', { similarity, message: message.slice(0, 50) });
+			return;
+		}
 
 		if (global.notify) {
 			await global.notify([{ username: 'AI', id: checksum, text: message.slice(0, 180), created_at: new Date().toISOString(), url: 'AI://urgent', isTest: false }]);
@@ -529,6 +634,71 @@ Focus on actionable information and trending narratives. Example:
 				headline: headline.replace(/\*\*/g, '').slice(0, 100)
 			};
 		}
+	}
+
+	/**
+	 * Get recent alerts from history for deduplication
+	 */
+	async getRecentAlerts(timeWindowMs) {
+		try {
+			const pool = getPool();
+			const [rows] = await pool.execute(
+				`SELECT message, created_at FROM ai_notify_history
+				 WHERE created_at >= DATE_SUB(NOW(), INTERVAL ? MICROSECOND)
+				 AND urgency = 'URGENT'
+				 ORDER BY created_at DESC`,
+				[timeWindowMs * 1000]
+			);
+			return rows || [];
+		} catch (error) {
+			// Gracefully handle missing table
+			return [];
+		}
+	}
+
+	/**
+	 * Calculate similarity between message and recent messages
+	 */
+	async calculateMessageSimilarity(newMessage, recentMessages) {
+		if (!recentMessages || recentMessages.length === 0) return 0;
+
+		const normalize = (text) => text.toLowerCase()
+			.replace(/[^\w\s]/g, ' ')
+			.replace(/\s+/g, ' ')
+			.trim();
+
+		const newNorm = normalize(newMessage);
+		let maxSimilarity = 0;
+
+		for (const recent of recentMessages) {
+			const recentNorm = normalize(recent);
+
+			// Simple Jaccard similarity on words
+			const newWords = new Set(newNorm.split(' '));
+			const recentWords = new Set(recentNorm.split(' '));
+
+			const intersection = new Set([...newWords].filter(x => recentWords.has(x)));
+			const union = new Set([...newWords, ...recentWords]);
+
+			const similarity = intersection.size / union.size;
+			maxSimilarity = Math.max(maxSimilarity, similarity);
+
+			// Also check for ticker overlap
+			const newTickers = newMessage.match(/\$[A-Z]{2,10}/g) || [];
+			const recentTickers = recent.match(/\$[A-Z]{2,10}/g) || [];
+
+			if (newTickers.length > 0 && recentTickers.length > 0) {
+				const tickerOverlap = newTickers.filter(t => recentTickers.includes(t)).length;
+				const tickerSimilarity = tickerOverlap / Math.max(newTickers.length, recentTickers.length);
+
+				// If high ticker overlap and similar structure, boost similarity
+				if (tickerSimilarity > 0.5 && similarity > 0.3) {
+					maxSimilarity = Math.max(maxSimilarity, 0.85);
+				}
+			}
+		}
+
+		return maxSimilarity;
 	}
 
 	getLogs() { return this.logs; }
