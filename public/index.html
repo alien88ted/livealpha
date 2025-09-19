@@ -133,8 +133,20 @@
             return new Date(s.replace(' ', 'T') + 'Z');
         }
 
-        function formatTime(dateString) {
-            const date = parseDateUtc(dateString);
+        function inferDateFromTweetId(id) {
+            try {
+                const EPOCH = 1288834974657n;
+                const bid = BigInt(String(id));
+                const ms = Number((bid >> 22n) + EPOCH);
+                return new Date(ms);
+            } catch { return new Date(); }
+        }
+
+        function formatTime(dateString, id) {
+            let date = parseDateUtc(dateString);
+            if (isNaN(date.getTime()) || !dateString) {
+                date = inferDateFromTweetId(id);
+            }
             const now = new Date();
             let diff = Math.floor((now - date) / 1000);
             if (diff < 0) diff = 0; // clamp future timestamps from TZ drift
@@ -177,7 +189,7 @@
                 <div class="tweet ${isNew ? 'new-tweet' : ''} ${isTest ? 'test-tweet' : ''}" data-id="${tweet.id}">
                     <div class="tweet-header">
                         ${isTest ? '🧪 TEST' : '🚨 ALPHA'} @${username}
-                        <span class="tweet-meta">${formatTime(tweet.created_at)} ago | ID: ${tweet.id}</span>
+                        <span class="tweet-meta">${formatTime(tweet.created_at, tweet.id)} ago | ID: ${tweet.id}</span>
                         <span class="tweet-actions" style="float:right;">
                             <button onclick="openTweet('${username}','${tweet.id}')">Open</button>
                             ${tweet.conversation_id && tweet.conversation_id !== tweet.id ? `<button onclick="openThread('${username}','${tweet.conversation_id}')">Open thread</button>` : ''}
