@@ -144,11 +144,20 @@
 
         function formatTime(dateString, id) {
             let date = parseDateUtc(dateString);
+
+            // Debug logging
+            console.log(`formatTime: dateString="${dateString}", id="${id}"`);
+            console.log(`parseDateUtc result:`, date, `isNaN:`, isNaN(date.getTime()));
+
             if (isNaN(date.getTime()) || !dateString) {
+                console.log(`Using Tweet ID fallback for ${id}`);
                 date = inferDateFromTweetId(id);
             }
+
             const now = new Date();
             let diff = Math.floor((now - date) / 1000);
+            console.log(`Time diff: ${diff}s (${Math.floor(diff/60)}min)`);
+
             if (diff < 0) diff = 0; // clamp future timestamps from TZ drift
 
             if (diff < 60) return `${diff}s`;
