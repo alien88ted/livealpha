@@ -191,6 +191,49 @@
             color: var(--text);
         }
 
+        .ai-status-bar {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            margin-bottom: 16px;
+            padding: 12px 16px;
+            background: var(--bg);
+            border-radius: 8px;
+            font-size: 13px;
+        }
+
+        .ai-model-status {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .ai-model-indicator {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--text-subtle);
+        }
+
+        .ai-model-indicator.active {
+            background: var(--green);
+            animation: pulse 2s infinite;
+        }
+
+        .ai-model-indicator.processing {
+            background: var(--orange);
+            animation: fade 1s infinite;
+        }
+
+        .ai-model-indicator.error {
+            background: var(--red);
+        }
+
+        .ai-timestamp {
+            color: var(--text-subtle);
+            font-size: 11px;
+        }
+
         .toggle-btn {
             background: var(--text);
             color: var(--surface);
@@ -618,6 +661,25 @@
                 </div>
                 <button id="aiToggle" class="toggle-btn">Details</button>
             </div>
+
+            <div class="ai-status-bar">
+                <div class="ai-model-status">
+                    <div class="ai-model-indicator" id="opusIndicator"></div>
+                    <span>Opus</span>
+                    <span class="ai-timestamp" id="opusTimestamp">Never run</span>
+                </div>
+                <div class="ai-model-status">
+                    <div class="ai-model-indicator" id="haikuIndicator"></div>
+                    <span>Haiku</span>
+                    <span class="ai-timestamp" id="haikuTimestamp">Never run</span>
+                </div>
+                <div class="ai-model-status">
+                    <div class="ai-model-indicator" id="sonnetIndicator"></div>
+                    <span>Sonnet</span>
+                    <span class="ai-timestamp" id="sonnetTimestamp">Never run</span>
+                </div>
+            </div>
+
             <div id="aiCompact">
                 <div class="tickers" id="aiTickersContainer"></div>
                 <div class="headline" id="aiHeadline">Analyzing market activity...</div>
@@ -848,6 +910,65 @@
                 aiElement.textContent = '●';
                 aiElement.classList.add('ai-status-idle');
             }
+
+            // Update model status indicators
+            updateModelStatus('opus', aiData.lastOpusAt, phase === 'opus' && isRunning);
+            updateModelStatus('haiku', aiData.lastHaikuDecisionAt || aiData.lastHaikuFlashAt, phase.includes('haiku') && isRunning);
+            updateModelStatus('sonnet', aiData.lastSonnetAt, phase === 'sonnet' && isRunning);
+        }
+
+        function updateModelStatus(model, lastRun, isCurrentlyRunning) {
+            const indicator = document.getElementById(`${model}Indicator`);
+            const timestamp = document.getElementById(`${model}Timestamp`);
+
+            // Clear existing classes
+            indicator.className = 'ai-model-indicator';
+
+            if (isCurrentlyRunning) {
+                indicator.classList.add('processing');
+            } else if (lastRun) {
+                indicator.classList.add('active');
+            }
+
+            // Format timestamp
+            if (lastRun) {
+                const date = new Date(lastRun);
+                const now = new Date();
+                const diffMs = now - date;
+                const diffMins = Math.floor(diffMs / 60000);
+                const diffHours = Math.floor(diffMins / 60);
+
+                let timeText;
+                if (diffMins < 1) {
+                    timeText = 'Just now';
+                } else if (diffMins < 60) {
+                    timeText = `${diffMins}m ago`;
+                } else if (diffHours < 24) {
+                    timeText = `${diffHours}h ago`;
+                } else {
+                    timeText = date.toLocaleDateString();
+                }
+
+                timestamp.textContent = timeText;
+            } else {
+                timestamp.textContent = 'Never run';
+            }
+        }
+
+        function formatTimeAgo(dateString) {
+            if (!dateString) return 'Never';
+            const date = new Date(dateString);
+            const now = new Date();
+            const diffMs = now - date;
+            const diffMins = Math.floor(diffMs / 60000);
+            const diffHours = Math.floor(diffMins / 60);
+            const diffDays = Math.floor(diffHours / 24);
+
+            if (diffMins < 1) return 'Just now';
+            if (diffMins < 60) return `${diffMins}m ago`;
+            if (diffHours < 24) return `${diffHours}h ago`;
+            if (diffDays < 7) return `${diffDays}d ago`;
+            return date.toLocaleDateString();
         }
 
         function compactFallbackFromContent(content) {
