@@ -666,6 +666,22 @@
                     <label for="filter-astaso1">@astaso1</label>
                 </div>
                 <div class="filter-item">
+                    <input type="checkbox" id="filter-eyearea" checked>
+                    <label for="filter-eyearea">@eyearea</label>
+                </div>
+                <div class="filter-item">
+                    <input type="checkbox" id="filter-trading_axe" checked>
+                    <label for="filter-trading_axe">@trading_axe</label>
+                </div>
+                <div class="filter-item">
+                    <input type="checkbox" id="filter-OwariETH" checked>
+                    <label for="filter-OwariETH">@OwariETH</label>
+                </div>
+                <div class="filter-item">
+                    <input type="checkbox" id="filter-issathecooker" checked>
+                    <label for="filter-issathecooker">@issathecooker</label>
+                </div>
+                <div class="filter-item">
                     <input type="checkbox" id="filter-alien88ted" checked>
                     <label for="filter-alien88ted">@alien88ted (TEST)</label>
                 </div>
@@ -754,7 +770,7 @@
         const socket = io();
         let allTweets = [];
         let accounts = new Set();
-        let enabledAccounts = new Set(['cz_binance', 'justinsuntron', 'CookerFlips', 'ShockedJS', 'LabsNoor', 'peacefuldecay', '0xpeely', 'km_trades', 'astaso1', 'alien88ted']);
+        let enabledAccounts = new Set(['cz_binance', 'justinsuntron', 'CookerFlips', 'ShockedJS', 'LabsNoor', 'peacefuldecay', '0xpeely', 'km_trades', 'astaso1', 'eyearea', 'trading_axe', 'OwariETH', 'issathecooker', 'alien88ted']);
 
         function parseDateUtc(value) {
             if (!value) return new Date();
