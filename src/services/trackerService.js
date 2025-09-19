@@ -94,7 +94,7 @@ class TrackerService {
         if (this.syncPromise) return this.syncPromise;
 
         this.syncPromise = (async () => {
-			const usernames = [...this.DEFAULT_ACCOUNTS, ...this.TEST_ACCOUNTS];
+			const usernames = [...this.DEFAULT_ACCOUNTS, ...this.TEST_ACCOUNTS, ...Array.from(this.dynamicAccounts)];
             for (const username of usernames) {
                 const lastSync = this.accountSync.get(username) || 0;
                 if (Date.now() - lastSync < this.minSyncIntervalMs) {
@@ -111,9 +111,12 @@ class TrackerService {
 								...t,
 								username,
 								isTest: this.TEST_ACCOUNTS.includes(username),
-								url: `https://twitter.com/${username}/status/${t.id}`
+								url: `https://twitter.com/${username}/status/${t.id}`,
+								tweetType: 'live' // Mark as live tweets from sync
 							}));
-							global.io.emit('newTweets', processedTweets);
+							// Emit both events for compatibility
+							global.io.emit('newTweets', processedTweets); // Backward compatibility
+							global.io.emit('liveTweets', processedTweets); // Enhanced UX
 						}
 						if (global.aiMaybeUpdate) {
 							global.aiMaybeUpdate();
@@ -189,7 +192,7 @@ class TrackerService {
     }
 
     /**
-     * Initialize smart backfill system
+     * Initialize one-time backfill system (last 100 tweets only)
      */
     async initializeBackfillSystem(accounts) {
         this.backfillState = {
@@ -199,61 +202,111 @@ class TrackerService {
             accountProgress: []
         };
 
-        // Initialize account progress with oldest tweet IDs
+        // Check which accounts need initial 100-tweet backfill
         for (const username of accounts) {
-            const oldestId = await this.twitterService.getOldestTweetId(username);
+            const tweetCount = await this.twitterService.getTweetCount(username);
+            const needsBackfill = tweetCount === 0; // Only backfill if no tweets exist
+            
             this.backfillState.accountProgress.push({
                 username,
-                lastBackfillId: oldestId,
-                completed: false
+                lastBackfillId: null,
+                completed: !needsBackfill, // Mark as completed if no backfill needed
+                isInitialBackfill: needsBackfill
             });
             
-            if (oldestId) {
-                console.log(`🔄 @${username} backfill will start from tweet ID: ${oldestId}`);
+            if (needsBackfill) {
+                console.log(`🆕 @${username} needs initial 100-tweet backfill`);
             } else {
-                console.log(`🆕 @${username} no existing tweets - fresh backfill`);
+                console.log(`✅ @${username} already initialized (${tweetCount} tweets) - no backfill needed`);
             }
         }
 
-        console.log('🧠 Smart backfill system initialized');
+        console.log('🧠 One-time backfill system initialized');
 
-        // Start backfill after initial setup (wait 30s)
+        // Start one-time backfill after initial setup (wait 10s)
         setTimeout(() => {
-            this.runSmartBackfill().then(() => {
-                this.scheduleNextBackfill();
-            });
-        }, 30000);
+            this.runOneTimeBackfill();
+        }, 10000);
     }
 
     /**
-     * Run smart backfill based on API usage
+     * Run one-time backfill (last 100 tweets only per account)
      */
-    async runSmartBackfill() {
+    async runOneTimeBackfill() {
         if (!this.isRunning) return;
 
-        const usage = this.twitterService.getApiUsage();
-        const availableRequests = usage.rateLimit - usage.requests;
-        const timeUntilReset = usage.timeUntilReset;
+        console.log('🚀 Starting one-time initialization backfill (100 tweets per new account)');
 
-        // Dynamic thresholds based on time until reset
-        let maxBackfillRequests;
-        if (timeUntilReset > 10 * 60 * 1000) { // More than 10 min left
-            maxBackfillRequests = Math.min(50, availableRequests * 0.3);
-        } else if (timeUntilReset > 5 * 60 * 1000) { // More than 5 min left
-            maxBackfillRequests = Math.min(20, availableRequests * 0.2);
-        } else { // Less than 5 min left
-            maxBackfillRequests = Math.min(5, availableRequests * 0.1);
+        for (const accountInfo of this.backfillState.accountProgress) {
+            if (!accountInfo.isInitialBackfill || accountInfo.completed) {
+                continue; // Skip accounts that don't need backfill
+            }
+
+            try {
+                console.log(`📥 Initial backfill for @${accountInfo.username} (last 100 tweets)...`);
+
+                // Get last 100 tweets for this account (no until_id = gets most recent)
+                const tweets = await this.twitterService.fetchLatestTweets(
+                    accountInfo.username, 
+                    false, // not prioritizing new (this is backfill)
+                    null   // no maxId = gets most recent 100 tweets
+                );
+
+                if (tweets.length > 0) {
+                    // Save tweets to database
+                    let savedCount = 0;
+                    const historicalTweets = [];
+                    
+                    for (const tweet of tweets) {
+                        try {
+                            await this.twitterService.saveTweetsToDb([tweet], accountInfo.username);
+                            savedCount++;
+                            
+                            // Prepare for historical emission (background)
+                            historicalTweets.push({
+                                ...tweet,
+                                username: accountInfo.username,
+                                isTest: this.TEST_ACCOUNTS.includes(accountInfo.username),
+                                url: `https://twitter.com/${accountInfo.username}/status/${tweet.id}`,
+                                tweetType: 'historical' // Mark as historical backfill
+                            });
+                        } catch (error) {
+                            if (!error.message.includes('Duplicate entry')) {
+                                console.error(`❌ Error saving tweet ${tweet.id}:`, error.message);
+                            }
+                        }
+                    }
+
+                    // Emit historical tweets in background (non-disruptive)
+                    if (global.io && historicalTweets.length > 0) {
+                        global.io.emit('historicalTweets', historicalTweets);
+                    }
+
+                    this.backfillState.totalTweetsBackfilled += savedCount;
+                    console.log(`✅ @${accountInfo.username}: Saved ${savedCount}/${tweets.length} tweets`);
+                } else {
+                    console.log(`⚠️  @${accountInfo.username}: No tweets found`);
+                }
+
+                // Mark as completed (never backfill again)
+                accountInfo.completed = true;
+                
+                // Brief delay between accounts
+                await new Promise(resolve => setTimeout(resolve, 2000));
+
+            } catch (error) {
+                console.error(`❌ Initial backfill error @${accountInfo.username}:`, error.message);
+                // Mark as completed even on error to avoid infinite retries
+                accountInfo.completed = true;
+            }
         }
 
-        console.log(`📊 Backfill budget: ${maxBackfillRequests} requests (${availableRequests} available, ${Math.floor(timeUntilReset/60000)}min until reset)`);
+        console.log(`🎉 One-time backfill complete! Total tweets: ${this.backfillState.totalTweetsBackfilled}`);
 
-        if (maxBackfillRequests < 5) {
-            console.log('⏸️  Pausing backfill - insufficient API budget');
-            return;
-        }
-
-        let requestsUsed = 0;
+        // Initialize variables for backfill loop
+        const maxBackfillRequests = 50; // Maximum requests per backfill session
         const startAccount = this.backfillState.currentAccount;
+        let requestsUsed = 0;
 
         // Cycle through accounts
         while (requestsUsed < maxBackfillRequests && this.isRunning) {
@@ -283,25 +336,39 @@ class TrackerService {
                 );
                 requestsUsed += 2; // userTimeline + getUserId
 
-                if (oldTweets.length > 0) {
-                    // Save tweets and count new ones
-                    let newTweets = 0;
-                    for (const tweet of oldTweets) {
-                        try {
-                            await this.twitterService.saveTweetsToDb([tweet], accountInfo.username);
-                            newTweets++;
-                        } catch (error) {
-                            if (!error.message.includes('Duplicate entry')) {
-                                console.error(`❌ Error saving tweet ${tweet.id}:`, error.message);
+                    if (oldTweets.length > 0) {
+                        // Save tweets and count new ones
+                        let newTweets = 0;
+                        const historicalTweets = [];
+                        for (const tweet of oldTweets) {
+                            try {
+                                await this.twitterService.saveTweetsToDb([tweet], accountInfo.username);
+                                newTweets++;
+                                // Prepare for historical emission
+                                historicalTweets.push({
+                                    ...tweet,
+                                    username: accountInfo.username,
+                                    isTest: this.TEST_ACCOUNTS.includes(accountInfo.username),
+                                    url: `https://twitter.com/${accountInfo.username}/status/${tweet.id}`,
+                                    tweetType: 'historical' // Mark as historical backfill
+                                });
+                            } catch (error) {
+                                if (!error.message.includes('Duplicate entry')) {
+                                    console.error(`❌ Error saving tweet ${tweet.id}:`, error.message);
+                                }
                             }
                         }
-                    }
 
-                    this.backfillState.totalTweetsBackfilled += newTweets;
-                    accountInfo.lastBackfillId = oldTweets[oldTweets.length - 1].id;
+                        // Emit historical tweets separately (non-disruptive)
+                        if (global.io && historicalTweets.length > 0) {
+                            global.io.emit('historicalTweets', historicalTweets);
+                        }
 
-                    console.log(`📦 @${accountInfo.username}: +${newTweets}/${oldTweets.length} new tweets (${this.backfillState.totalTweetsBackfilled} total)`);
-                } else {
+                        this.backfillState.totalTweetsBackfilled += newTweets;
+                        accountInfo.lastBackfillId = oldTweets[oldTweets.length - 1].id;
+
+                        console.log(`📦 @${accountInfo.username}: +${newTweets}/${oldTweets.length} new tweets (${this.backfillState.totalTweetsBackfilled} total)`);
+                    } else {
                     // No more tweets to backfill for this account
                     accountInfo.completed = true;
                     console.log(`✅ @${accountInfo.username} backfill completed (no more tweets)`);
@@ -402,7 +469,7 @@ class TrackerService {
         await this.syncLatestTweets(24);
 
         const pool = getPool();
-		const usernames = [...this.DEFAULT_ACCOUNTS, ...this.TEST_ACCOUNTS];
+		const usernames = [...this.DEFAULT_ACCOUNTS, ...this.TEST_ACCOUNTS, ...Array.from(this.dynamicAccounts)];
         const placeholders = usernames.map(() => '?').join(',');
         const params = [...usernames];
         const limit = 200;
@@ -420,7 +487,8 @@ class TrackerService {
         console.log(`✅ Served ${rows.length} tweets from DB (24h window)`);
         return rows.map(row => ({
             ...row,
-            isTest: this.TEST_ACCOUNTS.includes(row.username)
+            isTest: this.TEST_ACCOUNTS.includes(row.username),
+            tweetType: 'fresh' // Mark as fresh load from DB
         }));
     }
 }
