@@ -2,8 +2,25 @@ const axios = require('axios');
 
 class PriceService {
     constructor() {
-        this.apiKey = process.env.COINMARKETCAP_API_KEY;
-        this.baseUrl = 'https://pro-api.coinmarketcap.com/v1';
+        // Multiple API providers for redundancy
+        this.providers = {
+            coingecko: {
+                baseUrl: 'https://api.coingecko.com/api/v3',
+                key: null, // Free tier
+                enabled: true
+            },
+            coinmarketcap: {
+                baseUrl: 'https://pro-api.coinmarketcap.com/v1',
+                key: process.env.COINMARKETCAP_API_KEY,
+                enabled: Boolean(process.env.COINMARKETCAP_API_KEY)
+            },
+            binance: {
+                baseUrl: 'https://api.binance.com/api/v3',
+                key: null, // Free tier
+                enabled: true
+            }
+        };
+
         this.cache = new Map(); // ticker -> { price, change24h, lastUpdated }
         this.updateInterval = 60000; // 1 minute
         this.isUpdating = false;
@@ -69,13 +86,68 @@ class PriceService {
             'EIGEN': 31663
         };
 
-        // Start price updates if API key is available
-        if (this.apiKey) {
-            this.startPriceUpdates();
-            console.log('💰 Price service initialized with CoinMarketCap API');
-        } else {
-            console.log('⚠️  CoinMarketCap API key not found - price tracking disabled');
-        }
+        // CoinGecko symbol mapping (different from CMC)
+        this.coingeckoIds = {
+            'ASTER': 'astar',
+            'BTC': 'bitcoin',
+            'ETH': 'ethereum',
+            'SOL': 'solana',
+            'AVAX': 'avalanche-2',
+            'LINK': 'chainlink',
+            'UNI': 'uniswap',
+            'AAVE': 'aave',
+            'SUSHI': 'sushi',
+            'DOGE': 'dogecoin',
+            'ADA': 'cardano',
+            'DOT': 'polkadot',
+            'MATIC': 'matic-network',
+            'ATOM': 'cosmos',
+            'NEAR': 'near',
+            'FTM': 'fantom',
+            'ALGO': 'algorand',
+            'XRP': 'ripple',
+            'LTC': 'litecoin',
+            'BCH': 'bitcoin-cash',
+            'XLM': 'stellar',
+            'VET': 'vechain',
+            'ICP': 'internet-computer',
+            'FLOW': 'flow',
+            'SAND': 'the-sandbox',
+            'MANA': 'decentraland',
+            'CRV': 'curve-dao-token',
+            'COMP': 'compound-governance-token',
+            'YFI': 'yearn-finance',
+            'SNX': 'havven',
+            'MKR': 'maker',
+            'RUNE': 'thorchain',
+            'LUNA': 'terra-luna',
+            'SHIB': 'shiba-inu',
+            'APE': 'apecoin',
+            'LDO': 'lido-dao',
+            'FTT': 'ftx-token',
+            'GMT': 'stepn',
+            'APT': 'aptos',
+            'SUI': 'sui',
+            'ARB': 'arbitrum',
+            'OP': 'optimism',
+            'BLUR': 'blur',
+            'PEPE': 'pepe',
+            'WLD': 'worldcoin-wld',
+            'SEI': 'sei-network',
+            'TIA': 'celestia',
+            'PYTH': 'pyth-network',
+            'JUP': 'jupiter-exchange-solana',
+            'WIF': 'dogwifcoin',
+            'BONK': 'bonk',
+            'ONDO': 'ondo-finance',
+            'FLOKI': 'floki',
+            'NEIRO': 'first-neiro-on-ethereum',
+            'EIGEN': 'eigenlayer'
+        };
+
+        // Start price updates (CoinGecko doesn't need API key)
+        this.startPriceUpdates();
+        console.log('💰 Price service initialized with CoinGecko API (free tier)');
     }
 
     /**
@@ -120,7 +192,7 @@ class PriceService {
      * Update prices for specific tickers
      */
     async updatePrices(tickers = []) {
-        if (!this.apiKey || this.isUpdating) return;
+        if (this.isUpdating) return;
 
         this.isUpdating = true;
 
@@ -134,20 +206,8 @@ class PriceService {
 
             console.log(`💰 Updating prices for: ${symbols.join(', ')}`);
 
-            // Separate symbols into those with known IDs and those without
-            const symbolsWithIds = symbols.filter(s => this.symbolToId[s]);
-            const symbolsWithoutIds = symbols.filter(s => !this.symbolToId[s]);
-
-            // Fetch by IDs first (more reliable)
-            if (symbolsWithIds.length > 0) {
-                const ids = symbolsWithIds.map(s => this.symbolToId[s]).join(',');
-                await this.fetchPricesByIds(ids, symbolsWithIds);
-            }
-
-            // Fallback to symbol lookup for unknown tokens
-            if (symbolsWithoutIds.length > 0) {
-                await this.fetchPricesBySymbols(symbolsWithoutIds);
-            }
+            // Try CoinGecko first (free tier, no API key needed)
+            await this.fetchFromCoinGecko(symbols);
 
         } catch (error) {
             console.error('❌ Price update error:', error.message);
@@ -157,54 +217,68 @@ class PriceService {
     }
 
     /**
-     * Fetch prices using CoinMarketCap IDs (more accurate)
+     * Fetch prices from CoinGecko (free tier)
      */
-    async fetchPricesByIds(ids, symbols) {
+    async fetchFromCoinGecko(symbols) {
         try {
-            const response = await axios.get(`${this.baseUrl}/cryptocurrency/quotes/latest`, {
-                headers: {
-                    'X-CMC_PRO_API_KEY': this.apiKey,
-                    'Accept': 'application/json'
-                },
+            // Map symbols to CoinGecko IDs
+            const coingeckoIds = symbols
+                .filter(s => this.coingeckoIds[s])
+                .map(s => this.coingeckoIds[s]);
+
+            if (coingeckoIds.length === 0) return;
+
+            const response = await axios.get(`${this.providers.coingecko.baseUrl}/simple/price`, {
                 params: {
-                    id: ids,
-                    convert: 'USD'
+                    ids: coingeckoIds.join(','),
+                    vs_currencies: 'usd',
+                    include_24hr_change: true
                 },
                 timeout: 10000
             });
 
-            if (response.data && response.data.data) {
+            if (response.data) {
                 const now = new Date().toISOString();
 
-                // Map response back to symbols
-                Object.values(response.data.data).forEach((data, index) => {
-                    if (data && data.quote && data.quote.USD) {
-                        const symbol = symbols[index];
-                        const usd = data.quote.USD;
+                // Map back to symbols
+                Object.entries(response.data).forEach(([coingeckoId, data]) => {
+                    const symbol = Object.keys(this.coingeckoIds).find(
+                        key => this.coingeckoIds[key] === coingeckoId
+                    );
+
+                    if (symbol && data.usd) {
                         this.cache.set(symbol, {
-                            price: usd.price,
-                            change24h: usd.percent_change_24h,
+                            price: data.usd,
+                            change24h: data.usd_24h_change || 0,
                             lastUpdated: now,
-                            name: data.name
+                            source: 'coingecko'
                         });
                     }
                 });
 
-                console.log(`✅ Updated ${Object.keys(response.data.data).length} prices by ID`);
+                console.log(`✅ Updated ${Object.keys(response.data).length} prices from CoinGecko`);
             }
         } catch (error) {
-            console.error('❌ Error fetching prices by ID:', error.message);
+            console.error('❌ CoinGecko API error:', error.message);
+
+            // Fallback to CoinMarketCap if available
+            if (this.providers.coinmarketcap.enabled) {
+                console.log('🔄 Falling back to CoinMarketCap...');
+                await this.fetchFromCoinMarketCap(symbols);
+            }
         }
     }
 
     /**
-     * Fetch prices using symbol lookup (fallback)
+     * Fallback: Fetch from CoinMarketCap (requires API key)
      */
-    async fetchPricesBySymbols(symbols) {
+    async fetchFromCoinMarketCap(symbols) {
+        if (!this.providers.coinmarketcap.enabled) return;
+
         try {
-            const response = await axios.get(`${this.baseUrl}/cryptocurrency/quotes/latest`, {
+            const response = await axios.get(`${this.providers.coinmarketcap.baseUrl}/cryptocurrency/quotes/latest`, {
                 headers: {
-                    'X-CMC_PRO_API_KEY': this.apiKey,
+                    'X-CMC_PRO_API_KEY': this.providers.coinmarketcap.key,
                     'Accept': 'application/json'
                 },
                 params: {
@@ -224,23 +298,22 @@ class PriceService {
                             price: usd.price,
                             change24h: usd.percent_change_24h,
                             lastUpdated: now,
-                            name: data.name
+                            source: 'coinmarketcap'
                         });
                     }
                 }
 
-                console.log(`✅ Updated ${Object.keys(response.data.data).length} prices by symbol`);
+                console.log(`✅ Updated ${Object.keys(response.data.data).length} prices from CoinMarketCap`);
             }
         } catch (error) {
             if (error.response?.status === 429) {
-                console.log('⚠️  CoinMarketCap rate limit hit, backing off');
-            } else if (error.response?.status === 401) {
-                console.error('❌ CoinMarketCap API key invalid');
+                console.log('⚠️  CoinMarketCap rate limit hit');
             } else {
-                console.error('❌ Error fetching prices by symbol:', error.message);
+                console.error('❌ CoinMarketCap API error:', error.message);
             }
         }
     }
+
 
     /**
      * Start automatic price updates
@@ -297,8 +370,13 @@ class PriceService {
      * Get price status for dashboard
      */
     getStatus() {
+        const providers = Object.entries(this.providers)
+            .filter(([_, config]) => config.enabled)
+            .map(([name]) => name);
+
         return {
-            enabled: Boolean(this.apiKey),
+            enabled: providers.length > 0,
+            providers: providers,
             cachedCount: this.cache.size,
             isUpdating: this.isUpdating,
             lastUpdate: Array.from(this.cache.values())
