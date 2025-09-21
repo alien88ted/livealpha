@@ -8,6 +8,7 @@ const apiRoutes = require('./routes/api');
 const NotifierService = require('./services/notifierService');
 const AIService = require('./services/aiService');
 const PriceService = require('./services/priceService');
+const { ALLOWED_USERNAMES } = require('./config/allowlist');
 const { getPool } = require('./config/database');
 require('dotenv').config();
 
@@ -31,6 +32,22 @@ class AlphaTrackerServer {
         this.setupRoutes();
         this.setupSocketIO();
         this.setupGracefulShutdown();
+
+        // Register Discord webhook if provided
+        try {
+            const url = process.env.DISCORD_WEBHOOK_URL;
+            if (url) {
+                this.notifier.registerDiscordWebhook('primary', {
+                    enabled: true,
+                    url,
+                    notifications: { allTweets: true, highEngagement: true, aiInsights: true },
+                    accounts: ALLOWED_USERNAMES
+                });
+                console.log('🔗 Discord webhook registered');
+            }
+        } catch (e) {
+            console.warn('⚠️  Discord webhook registration failed:', e.message || e);
+        }
     }
 
     /**
@@ -136,6 +153,15 @@ class AlphaTrackerServer {
 			}
 		};
 
+		// Global AI notifier for Discord (insights/urgent)
+		global.notifyAI = async (insight) => {
+			try {
+				await this.notifier.notifyAIInsights(insight);
+			} catch (e) {
+				console.error('❌ AI Discord notifier error:', e.message);
+			}
+		};
+
 		// Periodically process Telegram admin commands to add accounts
 		setInterval(async () => {
 			try {
@@ -177,7 +203,9 @@ class AlphaTrackerServer {
 						this.priceService.updateAISuggestedPrices(compact.tickers).catch(() => {});
 					}
 
-					this.io.emit('aiInsights', { content: result.content, compact, cached: !!result.cached });
+                    this.io.emit('aiInsights', { content: result.content, compact, cached: !!result.cached });
+                    // Also send to Discord webhook
+                    this.notifier.notifyAIInsights({ headline: compact.headline, tickers: compact.tickers }).catch(() => {});
 					// Ask Sonnet if TG notification should be sent based on history
 					this.ai.maybeTelegramNotifyFromSummary(result.content).catch(() => {});
 				}

@@ -1,15 +1,13 @@
 const express = require('express');
 const { getPool } = require('../config/database');
 const AIService = require('../services/aiService');
-const CryptoDataService = require('../services/cryptoDataService');
 
 const router = express.Router();
 
 // In-memory webhook config storage (could be moved to database later)
 let webhookConfigs = new Map();
 
-// Initialize crypto data service
-const cryptoService = new CryptoDataService();
+// Removed unused CryptoDataService import/instance (no dependency in repo)
 
 /**
  * Get fresh live tweets from Twitter API
@@ -164,10 +162,23 @@ router.get('/ai/status', async (req, res) => {
         // Get AI service from app (server has the AI instance)
         const ai = req.app.get('ai') || new AIService();
         const status = await ai.getStatus();
-        res.json(status);
+        const usage = ai.getUsageStats ? ai.getUsageStats() : null;
+        res.json({ ...status, usage });
     } catch (error) {
         console.error('❌ Error fetching AI status:', error.message);
         res.status(500).json({ error: 'Failed to fetch AI status' });
+    }
+});
+
+// AI budget endpoint
+router.get('/ai/budget', async (req, res) => {
+    try {
+        const ai = req.app.get('ai') || new AIService();
+        const usage = ai.getUsageStats ? ai.getUsageStats() : null;
+        res.json(usage || {});
+    } catch (error) {
+        console.error('❌ Error fetching AI budget:', error.message);
+        res.status(500).json({ error: 'Failed to fetch AI budget' });
     }
 });
 
@@ -180,10 +191,10 @@ router.get('/ai/memory', async (req, res) => {
 
         // Tweets context used for prompts
         const [tweets] = await pool.execute(
-            `SELECT id, username, text, created_at
+            `SELECT id, username, text, created_at, created_at_ms
              FROM cz_tweets
-             WHERE created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
-             ORDER BY created_at DESC
+             WHERE created_at_ms IS NOT NULL AND created_at_ms >= (UNIX_TIMESTAMP(NOW(6)) * 1000) - (24 * 60 * 60 * 1000)
+             ORDER BY created_at_ms DESC
              LIMIT 120`
         );
 
@@ -246,7 +257,7 @@ router.post('/ai/refresh', async (req, res) => {
         // Load last 24h tweets from DB for AI context
         const pool = getPool();
         const [rows] = await pool.execute(
-            `SELECT * FROM cz_tweets WHERE created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR) ORDER BY created_at DESC LIMIT 500`
+            `SELECT * FROM cz_tweets WHERE created_at_ms IS NOT NULL AND created_at_ms >= (UNIX_TIMESTAMP(NOW(6)) * 1000) - (24 * 60 * 60 * 1000) ORDER BY created_at_ms DESC LIMIT 500`
         );
 
         const ai = new AIService();

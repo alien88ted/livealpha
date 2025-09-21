@@ -150,6 +150,24 @@ async function createTables() {
 			)
 		`);
 
+		// Create AI runs table (usage & cost ledger)
+		await pool.execute(`
+			CREATE TABLE IF NOT EXISTS ai_runs (
+				id INT AUTO_INCREMENT PRIMARY KEY,
+				model VARCHAR(64) NOT NULL,
+				prompt_tokens INT DEFAULT 0,
+				completion_tokens INT DEFAULT 0,
+				input_cost_usd DECIMAL(10,6) DEFAULT 0,
+				output_cost_usd DECIMAL(10,6) DEFAULT 0,
+				total_cost_usd DECIMAL(10,6) GENERATED ALWAYS AS (input_cost_usd + output_cost_usd) VIRTUAL,
+				checksum VARCHAR(64) NULL,
+				purpose VARCHAR(64) NULL,
+				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+				INDEX idx_model (model),
+				INDEX idx_created_at (created_at)
+			)
+		`);
+
 		// Create AI usage tracking table
 		await pool.execute(`
 			CREATE TABLE IF NOT EXISTS ai_usage_log (

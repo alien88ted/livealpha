@@ -1,5 +1,6 @@
 const TwitterService = require('./twitterService');
 const { initializeDB, getPool } = require('../config/database');
+const { ALLOWED_USERNAMES } = require('../config/allowlist');
 
 class TrackerService {
     constructor() {
@@ -12,8 +13,8 @@ class TrackerService {
         this.minSyncIntervalMs = 45000; // cooldown per account
         this.syncPromise = null; // share in-flight sync among callers
         
-		// Default accounts configuration
-		this.DEFAULT_ACCOUNTS = ['cz_binance', 'CookerFlips', 'ShockedJS', 'LabsNoor', '0xpeely', 'km_trades', 'astaso1', 'eyearea', 'trading_axe', 'OwariETH', 'issathecooker', 'mmissoralways'];
+		// Default accounts configuration (keep minimal; env/DB handles dynamic growth)
+		this.DEFAULT_ACCOUNTS = ['cz_binance', 'CookerFlips', 'ShockedJS', 'LabsNoor', 'justinsuntron'];
         this.TEST_ACCOUNTS = ['alien88ted'];
 		this.dynamicAccounts = new Set(); // from DB tracked_accounts
     }
@@ -47,7 +48,9 @@ class TrackerService {
 				accounts = Array.from(new Set([...accounts, ...Array.from(this.dynamicAccounts)]));
 			} catch {}
 
-			console.log(`📊 Alpha accounts: ${accounts.join(', ')}`);
+			// Ensure priority accounts are included (non-exclusive)
+			accounts = Array.from(new Set([...accounts, ...ALLOWED_USERNAMES]));
+			console.log(`📊 Alpha accounts (with priority added): ${accounts.join(', ')}`);
             console.log(`🧪 Test accounts: ${this.TEST_ACCOUNTS.join(', ')} [FEED ONLY]`);
         console.log('🔴 LIVE STREAM MODE - Zero polling delay!');
 
@@ -383,21 +386,21 @@ class TrackerService {
     async getFreshTweets() {
         await this.syncLatestTweets(24);
 
-        const pool = getPool();
+		const pool = getPool();
 		const usernames = [...this.DEFAULT_ACCOUNTS, ...this.TEST_ACCOUNTS, ...Array.from(this.dynamicAccounts)];
         const placeholders = usernames.map(() => '?').join(',');
         const params = [...usernames];
         const limit = 200;
 
 		const [rows] = await pool.execute(
-            `SELECT *
-             FROM cz_tweets
-			 WHERE created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
+			`SELECT *
+			 FROM cz_tweets
+			 WHERE created_at_ms IS NOT NULL AND created_at_ms >= (UNIX_TIMESTAMP(NOW(6)) * 1000) - (24 * 60 * 60 * 1000)
 			   AND username IN (${placeholders})
-             ORDER BY created_at DESC
-             LIMIT ${limit}`,
-            params
-        );
+			 ORDER BY created_at_ms DESC
+			 LIMIT ${limit}`,
+			params
+		);
 
         console.log(`✅ Served ${rows.length} tweets from DB (24h window)`);
         return rows.map(row => ({

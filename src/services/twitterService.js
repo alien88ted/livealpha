@@ -2,6 +2,7 @@ const { TwitterApi, ETwitterStreamEvent } = require('twitter-api-v2');
 const { getPool } = require('../config/database');
 const RateLimitManager = require('./rateLimitManager');
 const TweetCache = require('./tweetCache');
+const { ALLOWED_USERNAMES } = require('../config/allowlist');
 require('dotenv').config();
 
 class TwitterService {
@@ -207,6 +208,7 @@ class TwitterService {
                 }
             }
 
+            // Optional: prioritize listed accounts but do not exclude others
             const userId = await this.getUserId(username);
             if (!userId) {
                 console.error(`❌ Cannot fetch tweets: User @${username} not found`);
@@ -495,28 +497,35 @@ class TwitterService {
         const BATCH_SIZE = 25;
         for (let i = 0; i < tweets.length; i += BATCH_SIZE) {
             const batch = tweets.slice(i, i + BATCH_SIZE);
-            const rows = batch.map(tweet => [
-                tweet.id,
-                tweet.text,
-                new Date(tweet.created_at),
-                tweet.public_metrics?.retweet_count || 0,
-                tweet.public_metrics?.like_count || 0,
-                tweet.public_metrics?.reply_count || 0,
-                tweet.public_metrics?.quote_count || 0,
-                tweet.public_metrics?.impression_count || 0,
-                `https://twitter.com/${username}/status/${tweet.id}`,
-                username
-            ]);
+            const rows = batch.map(tweet => {
+                const created = new Date(tweet.created_at);
+                const createdMs = Number.isFinite(created.getTime()) ? created.getTime() : Number((BigInt(String(tweet.id)) >> 22n) + 1288834974657n);
+                return [
+                    tweet.id,
+                    tweet.text,
+                    created,
+                    createdMs,
+                    tweet.public_metrics?.retweet_count || 0,
+                    tweet.public_metrics?.like_count || 0,
+                    tweet.public_metrics?.reply_count || 0,
+                    tweet.public_metrics?.quote_count || 0,
+                    tweet.public_metrics?.impression_count || 0,
+                    `https://twitter.com/${username}/status/${tweet.id}`,
+                    username
+                ];
+            });
 
-            const placeholders = rows.map(() => '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').join(', ');
+            const placeholders = rows.map(() => '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').join(', ');
             const flatParams = rows.flat();
 
             try {
                 await pool.execute(
                     `INSERT INTO cz_tweets
-                    (id, text, created_at, retweet_count, like_count, reply_count, quote_count, impression_count, url, username)
+                    (id, text, created_at, created_at_ms, retweet_count, like_count, reply_count, quote_count, impression_count, url, username)
                     VALUES ${placeholders}
                     ON DUPLICATE KEY UPDATE
+                    created_at = VALUES(created_at),
+                    created_at_ms = VALUES(created_at_ms),
                     retweet_count = VALUES(retweet_count),
                     like_count = VALUES(like_count),
                     reply_count = VALUES(reply_count),

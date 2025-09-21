@@ -173,8 +173,13 @@ class NotifierService {
 				const addMatch = text.match(/^\/add\s+@?([A-Za-z0-9_]{2,50})$/i);
 				if (addMatch) {
 					const username = addMatch[1];
-					await onAddAccount(username);
-					await this.sendTelegramMessage(`Added @${username} to monitor list.`);
+					const { isAllowed } = require('../config/allowlist');
+					if (isAllowed(username)) {
+						await onAddAccount(username);
+						await this.sendTelegramMessage(`✅ Added @${username} to monitor list.`);
+					} else {
+						await this.sendTelegramMessage(`⛔ @${username} is not on allowlist.`);
+					}
 				}
 			}
 			// acknowledge updates by requesting next offset

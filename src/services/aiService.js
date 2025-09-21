@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const Anthropic = require('@anthropic-ai/sdk').default;
 const { getPool } = require('../config/database');
+const { calculateCostUsd, getPricingForModel, DEFAULT_BUDGET_USD } = require('../config/aiPricing');
 
 class AIService {
 	constructor() {
@@ -46,7 +47,7 @@ class AIService {
 			'claude-sonnet-4-20250514': { input: 0.003, output: 0.015 },
 			'claude-3-5-haiku-20241022': { input: 0.0001, output: 0.0005 }
 		};
-		this.monthlyBudget = parseFloat(process.env.AI_MONTHLY_BUDGET || '500');
+        this.monthlyBudget = parseFloat(process.env.AI_MONTHLY_BUDGET || String(DEFAULT_BUDGET_USD));
 		this.state = {
 			phase: 'idle',
 			running: false,
@@ -204,7 +205,7 @@ class AIService {
 		);
 	}
 
-	async runModel(model, maxTokens, promptText) {
+    async runModel(model, maxTokens, promptText, meta = {}) {
 		const startTime = Date.now();
 		const res = await this.client.messages.create({
 			model,
@@ -218,16 +219,16 @@ class AIService {
 		const outputTokens = res.usage?.output_tokens || 0;
 		const executionTime = Date.now() - startTime;
 
-		await this.trackUsage(model, inputTokens, outputTokens, executionTime);
+        await this.trackUsage(model, inputTokens, outputTokens, executionTime, meta);
 
 		const part = (res?.content && res.content[0] && res.content[0].type === 'text') ? res.content[0].text : JSON.stringify(res);
 		return part;
 	}
 
-	async trackUsage(model, inputTokens, outputTokens, executionTime) {
+    async trackUsage(model, inputTokens, outputTokens, executionTime, meta = {}) {
 		try {
-			const modelCosts = this.costs[model] || { input: 0.003, output: 0.015 };
-			const cost = (inputTokens * modelCosts.input + outputTokens * modelCosts.output) / 1000;
+            const pricing = getPricingForModel(model);
+            const cost = (inputTokens * pricing.input + outputTokens * pricing.output) / 1000;
 
 			// Track spending by model for budget control
 			if (model.includes('opus')) {
@@ -250,17 +251,18 @@ class AIService {
 			this.usage.monthly[modelType]++;
 			this.usage.monthly.cost += cost;
 
-			// Store in database (gracefully handle missing table)
+            // Store in database (gracefully handle missing table)
 			try {
 				const pool = getPool();
-				await pool.execute(
-					`INSERT INTO ai_usage_log (model, input_tokens, output_tokens, cost_usd, execution_time_ms, operation_type)
-					 VALUES (?, ?, ?, ?, ?, ?)`,
-					[model, inputTokens, outputTokens, cost, executionTime, 'analysis']
-				);
+                const detailed = calculateCostUsd(model, inputTokens, outputTokens);
+                await pool.execute(
+                    `INSERT INTO ai_runs (model, prompt_tokens, completion_tokens, input_cost_usd, output_cost_usd, checksum, purpose)
+                     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                    [model, inputTokens, outputTokens, detailed.inputCostUsd, detailed.outputCostUsd, meta.checksum || null, meta.purpose || null]
+                );
 			} catch (dbError) {
 				// Table might not exist yet - just log the error but don't fail
-				if (!dbError.message.includes("doesn't exist")) {
+                if (!dbError.message || !dbError.message.includes("doesn't exist")) {
 					console.error('❌ Database error tracking AI usage:', dbError.message);
 				}
 			}
@@ -503,6 +505,13 @@ class AIService {
 		if (global.notify) {
 			await global.notify([{ username: 'AI', id: checksum, text: message.slice(0, 180), created_at: new Date().toISOString(), url: 'AI://urgent', isTest: false }]);
 		}
+		// Also send to Discord webhook with tickers extracted
+		try {
+			const tickers = (message.match(/\$[A-Z]{2,10}/g) || []).slice(0, 6);
+			if (global.notifyAI) {
+				await global.notifyAI({ headline: message, tickers });
+			}
+		} catch {}
 		// persist history + update state
 		const pool = getPool();
 		await pool.execute(`INSERT INTO ai_notify_history (message, urgency, summary_checksum) VALUES (?, ?, ?)`, [message.slice(0, 1000), 'URGENT', checksum]);
