@@ -27,6 +27,8 @@ const ALLOWED_USERNAMES = [
 	'trading_axe',
 	'luckio',
 	'eyearea'
+,
+	'worldlibertyfi'
 ];
 
 function isAllowed(username) {
