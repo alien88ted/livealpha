@@ -205,14 +205,18 @@ class AIService {
 		);
 	}
 
-    async runModel(model, maxTokens, promptText, meta = {}) {
+	async runModel(model, maxTokens, promptText, meta = {}) {
 		const startTime = Date.now();
-		const res = await this.client.messages.create({
+		const params = {
 			model,
 			max_tokens: maxTokens,
 			temperature: this.temperature,
 			messages: [{ role: 'user', content: [{ type: 'text', text: promptText }] }]
-		});
+		};
+		if (meta && meta.responseFormat === 'json_object') {
+			params.response_format = { type: 'json_object' };
+		}
+		const res = await this.client.messages.create(params);
 
 		// Track usage
 		const inputTokens = res.usage?.input_tokens || 0;
@@ -577,26 +581,37 @@ class AIService {
 			`SELECT message FROM ai_notify_history ORDER BY created_at DESC LIMIT 20`
 		);
 		const history = historyRows.map(r => r.message).join('\n---\n');
-		const prompt = `You are an AI trading alert system that monitors market narratives and ticker discussions to send focused, high-value notifications via Telegram. Your goal is to identify truly important, new, or actionable market information while avoiding spam.\n\nHere is your message history of previous notifications you've sent:\n<message_history>\n${history}\n</message_history>\n\nHere is the current market summary to analyze:\n<current_summary>\n${opusContent}\n</current_summary>\n\nYour job is to analyze the current summary against your message history to determine if you should send a Telegram notification. You should send notifications for:\n\n**HIGH PRIORITY (Always notify):**\n- Completely new tickers being discussed for the first time\n- Major narrative shifts or breaking developments\n- Extreme sentiment signals (\"BUY BUY BUY\" or \"SELL SELL SELL\" type urgency)\n- Time-sensitive opportunities that require immediate action\n\n**MEDIUM PRIORITY (Notify if significant):**\n- New angles on existing narratives\n- Notable volume/momentum changes in tracked tickers\n- Research opportunities worth investigating later\n- Emerging patterns or correlations\n\n**DO NOT NOTIFY FOR:**\n- Repetitive information already covered in recent messages\n- Minor price movements without narrative significance\n- Vague or low-confidence signals\n- Information that's not actionable or time-sensitive\n\n**NOTIFICATION GUIDELINES:**\n- Keep messages concise but informative\n- Include specific ticker symbols when relevant\n- Indicate urgency level (URGENT, RESEARCH, MONITOR, etc.)\n- Reference key data points or catalysts\n- Avoid sending more than 3-4 notifications per hour unless truly critical\n\nBefore making your decision, use the scratchpad to analyze what's new or different compared to your message history.\n\n<scratchpad>\n[Analyze the current summary against message history here - what's new, what's changed, what's the significance level, and whether it meets notification criteria]\n</scratchpad>\n\nBased on your analysis, either:\n\n1. If you should send a notification, write it inside <notification> tags with a clear, actionable message\n2. If no notification is needed, write <no_notification> and briefly explain why\n\nFormat notifications like this:\n- Start with urgency level in caps (URGENT, RESEARCH, MONITOR, etc.)\n- Include relevant tickers in $SYMBOL format\n- Keep under 200 characters when possible\n- Be specific about what action or attention is needed`;
-		const out = await this.runModel(this.sonnetModel, this.sonnetMaxTokens, prompt);
+		const prompt = `You are a notification decider for crypto market alerts. Consider the current market summary and the last alerts you sent. Decide whether to send an alert now.\n\nReturn STRICT JSON with keys: {\n  \"send\": boolean,\n  \"urgency\": \"URGENT\"|\"DIGEST\"|\"RESEARCH\",\n  \"reason\": string,\n  \"message\": string\n}\n\nRules:\n- Send URGENT only for new, time-sensitive, high-impact changes (new tickers or major narrative shift).\n- Avoid repeats; if similar to recent alerts, set send=false and explain.\n- Message must include 1-3 top $TICKERS when relevant and be under 200 chars.\n- If change is notable but not urgent, use DIGEST.\n\n<alerts_history>\n${history}\n</alerts_history>\n\n<current_summary>\n${opusContent}\n</current_summary>`;
+		const out = await this.runModel(this.sonnetModel, 1024, prompt, { purpose: 'alert_decider', responseFormat: 'json_object' });
 		return { checksum, out };
 	}
 
 	async maybeTelegramNotifyFromSummary(opusContent) {
 		if (!opusContent) return;
 		const { checksum, out } = await this.decideTelegramNotify(opusContent);
-		const notifMatch = out.match(/<notification>([\s\S]*?)<\/notification>/i);
-		const noMatch = out.match(/<no_notification>([\s\S]*?)<\/no_notification>/i);
-		if (notifMatch && notifMatch[1]) {
-			const message = this.sanitizeForTelegram(notifMatch[1].trim()).slice(0, 500);
-			if (global.notify) {
-				await global.notify([{ username: 'AI', id: checksum, text: message, created_at: new Date().toISOString(), url: 'AI://tg', isTest: false }]);
-			}
-			const pool = getPool();
-			await pool.execute(`INSERT INTO ai_notify_history (message, urgency, summary_checksum) VALUES (?, ?, ?)`, [message, message.split(' ')[0].replace(/[^A-Z]/g,'').slice(0,20) || null, checksum]);
-			this.state.lastSonnetAt = new Date();
-			this.logEvent('sonnet_notification_sent', { checksum, message });
+		let decision;
+		try { decision = JSON.parse(out); } catch { decision = null; }
+		if (!decision || typeof decision.send !== 'boolean') return;
+		if (!decision.send) {
+			this.logEvent('thinking_decision_skip', { checksum, reason: decision.reason || 'no_reason' });
+			return;
 		}
+		const urgency = (decision.urgency || 'DIGEST').toUpperCase().slice(0, 16);
+		const messageRaw = String(decision.message || '').slice(0, 500);
+		const message = this.sanitizeForTelegram(messageRaw);
+		if (!message) return;
+		if (global.notify) {
+			await global.notify([{ username: 'AI', id: checksum, text: message, created_at: new Date().toISOString(), url: 'AI://tg', isTest: false }]);
+		}
+		// Also push to Discord AI channel if available
+		try {
+			const tickers = (message.match(/\$[A-Z]{2,10}/g) || []).slice(0, 6);
+			if (global.notifyAI) await global.notifyAI({ headline: message, tickers });
+		} catch {}
+		const pool = getPool();
+		await pool.execute(`INSERT INTO ai_notify_history (message, urgency, summary_checksum) VALUES (?, ?, ?)`, [message, urgency, checksum]);
+		this.state.lastSonnetAt = new Date();
+		this.logEvent('sonnet_notification_sent', { checksum, urgency, message });
 	}
 
 	async compactFromContent(content) {
