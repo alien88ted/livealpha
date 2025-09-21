@@ -25,10 +25,11 @@ const ALLOWED_USERNAMES = [
 	'33b345',
 	'0xuberm',
 	'trading_axe',
-	'luckio',
-	'eyearea'
-,
-	'worldlibertyfi'
+    'luckio',
+    'eyearea',
+    'worldlibertyfi',
+    'cookerflips',
+    'shockedjs'
 ];
 
 function isAllowed(username) {
